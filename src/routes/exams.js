@@ -1,0 +1,13 @@
+const router = require('express').Router()
+const { protect } = require('../middleware/auth')
+const { getExams, createExam, getSubjects, createSubject, enterMarks, getMarks, generateReportCards, getStudentReportCard } = require('../controllers/examsController')
+router.use(protect)
+router.get('/subjects',                     getSubjects)
+router.post('/subjects',                    createSubject)
+router.get('/report-card/:student_id',      getStudentReportCard)
+router.get('/',                             getExams)
+router.post('/',                            createExam)
+router.post('/:id/marks',                   enterMarks)
+router.get('/:id/marks',                    getMarks)
+router.post('/:id/generate-report-cards',   generateReportCards)
+module.exports = router

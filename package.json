@@ -1,0 +1,31 @@
+{
+  "name": "admitflow-backend",
+  "version": "1.0.0",
+  "description": "AdmitFlow School CRM — Node.js + Express + MySQL",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "db:migrate": "node src/db/migrate.js",
+    "db:seed": "node src/db/seed.js",
+    "db:seed:comms": "node src/db/seed_communication.js",
+    "db:setup": "npm run db:migrate && npm run db:seed && npm run db:seed:comms",
+    "db:migrate:staff": "node src/db/migrate_staff_onboarding.js",
+    "db:migrate:kit": "node src/db/migrate_school_kit.js",
+    "db:migrate:tracking": "node src/db/migrate_tracking_cameras.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.2.0",
+    "mysql2": "^3.9.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}
