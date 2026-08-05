@@ -13,15 +13,33 @@ const pool = mysql.createPool({
   timezone:           '+05:30',
 })
 
-// Helper — const [rows] = await query('SELECT ...', [params])
+/*
+ * ── MySQL 9 compatibility shim ─────────────────────────────────────────────
+ * Railway runs MySQL 9.x. With mysql2, pool.execute() uses the binary
+ * prepared-statement protocol, and MySQL 9 is strict: LIMIT/OFFSET and some
+ * integer parameters sent as bound "?" values throw
+ *   "Incorrect arguments to mysqld_stmt_execute".
+ * Local MySQL (older) was lenient, so it only breaks in production.
+ *
+ * Fix: transparently route .execute() through .query() (the text protocol),
+ * which still escapes params safely but doesn't use prepared statements, so
+ * LIMIT ? / OFFSET ? work fine. Every controller keeps calling pool.execute()
+ * unchanged — no other file needs editing.
+ */
+const _origExecute = pool.execute.bind(pool)
+pool.execute = function (sql, params) {
+  return pool.query(sql, params)
+}
+
+// query() helper (unchanged API)
 async function query(sql, params = []) {
-  const [rows] = await pool.execute(sql, params)
+  const [rows] = await pool.query(sql, params)
   return [rows]
 }
 
 pool.getConnection()
   .then(conn => {
-    console.log('✅  MySQL connected — database: cmr of school')
+    console.log('✅  MySQL connected — database:', process.env.DB_NAME || 'cmr_of_school')
     conn.release()
   })
   .catch(err => {
