@@ -57,10 +57,14 @@ app.use('/api/ads',           require('./routes/ads'))
 app.use('/api/kit', require('./routes/kit'))
 app.use('/api/tracking', require('./routes/tracking'))
 app.use('/api/academic', require('./routes/academic'))
+app.use('/api/assistant', require('./routes/assistant'))
 
 const parentRouter                 = require('./routes/parent')
 const { router: driverRouter }     = require('./routes/driver')
 const { router: superAdminRouter } = require('./routes/superadmin')
+app.use('/api/features', require('./routes/features'))
+app.use('/api/ai-exams', require('./routes/aiExams'))
+app.use('/api/diary', require('./routes/diary'))
 
 app.use('/api/parent',     parentRouter)
 app.use('/api/driver',     driverRouter)
@@ -76,3 +80,6 @@ app.listen(PORT, () => {
   console.log(`🗄️   Database        → cmr_of_school (MySQL)`)
   console.log(`🌐  Frontend origin  → ${process.env.CLIENT_URL || 'http://localhost:5173'}\n`)
 })
+
+
+

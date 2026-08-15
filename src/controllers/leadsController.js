@@ -20,8 +20,10 @@ async function getLeads(req, res, next) {
     const { status, ai_label, search, limit = 50, offset = 0 } = req.query
     const schoolId = req.user.school_id
 
+    const [[activeYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
     let where  = 'l.school_id = ?'
     let params = [schoolId]
+    if (activeYear) { where += ' AND l.academic_year_id = ?'; params.push(activeYear.id) }
 
     if (status && status !== 'All')   { where += ' AND l.status = ?';   params.push(status) }
     if (ai_label && ai_label !== 'All') { where += ' AND l.ai_label = ?'; params.push(ai_label) }
@@ -47,11 +49,28 @@ async function getLeadStats(req, res, next) {
     const schoolId = req.user.school_id
     const today    = new Date().toISOString().slice(0, 10)
 
-    const [[td]]  = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE school_id=? AND DATE(created_at)=?`, [schoolId, today])
-    const [[hot]] = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE school_id=? AND ai_label='Hot' AND status NOT IN ('Admission','Lost')`, [schoolId])
-    const [[vis]] = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE school_id=? AND status='Campus Visit'`, [schoolId])
-    const [[adm]] = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE school_id=? AND status='Admission'`, [schoolId])
-    const [[tot]] = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE school_id=?`, [schoolId])
+    // Scope to the active academic year — must match getLeads' filtering,
+    // otherwise the dashboard total can include leads (e.g. from bulk imports
+    // or a previous year) that Leads/Pipeline correctly excludes.
+    const [[activeYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
+    let yearWhere  = 'school_id=?'
+    let yearParams = [schoolId]
+    if (activeYear) { yearWhere += ' AND academic_year_id=?'; yearParams.push(activeYear.id) }
+
+    const [[td]]  = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE ${yearWhere} AND DATE(created_at)=?`, [...yearParams, today])
+    const [[hot]] = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE ${yearWhere} AND ai_label='Hot' AND status NOT IN ('Admission','Lost')`, yearParams)
+    const [[vis]] = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE ${yearWhere} AND status='Campus Visit'`, yearParams)
+    const [[adm]] = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE ${yearWhere} AND status='Admission'`, yearParams)
+    const [[tot]] = await pool.execute(`SELECT COUNT(*) AS c FROM leads WHERE ${yearWhere}`, yearParams)
+
+    // Real per-status breakdown for the pipeline overview (replaces frontend % guesses)
+    const [statusRows] = await pool.execute(
+      `SELECT status, COUNT(*) AS c FROM leads WHERE ${yearWhere} GROUP BY status`,
+      yearParams
+    )
+    const STATUS_KEYS = ['New', 'Contacted', 'Campus Visit', 'Admission', 'Lost']
+    const status_counts = STATUS_KEYS.reduce((acc, s) => { acc[s] = 0; return acc }, {})
+    statusRows.forEach(r => { if (status_counts.hasOwnProperty(r.status)) status_counts[r.status] = r.c })
 
     const total = tot.c, admissions = adm.c
     res.json({
@@ -61,6 +80,7 @@ async function getLeadStats(req, res, next) {
       admissions,
       total_leads:     total,
       conversion_rate: total > 0 ? Math.round((admissions / total) * 100) : 0,
+      status_counts,
     })
   } catch (err) { next(err) }
 }
@@ -98,12 +118,13 @@ async function createLead(req, res, next) {
       [schoolId, phone]
     )
     const is_duplicate = dup.length > 0 ? 1 : 0
+    const [[activeYear2]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
     const { ai_score, ai_label } = calculateAIScore({ lead_source, email, child_grade, keyword })
 
     const [result] = await pool.execute(
-      `INSERT INTO leads (school_id, parent_name, phone, email, child_grade, area, lead_source, keyword, notes, ai_score, ai_label, is_duplicate)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [schoolId, parent_name, phone.trim(), email||null, child_grade, area, lead_source||'Website', keyword||null, notes, ai_score, ai_label, is_duplicate]
+      `INSERT INTO leads (school_id, parent_name, phone, email, child_grade, area, lead_source, keyword, notes, ai_score, ai_label, is_duplicate, academic_year_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [schoolId, parent_name, phone.trim(), email||null, child_grade, area, lead_source||'Website', keyword||null, notes, ai_score, ai_label, is_duplicate, (activeYear2 ? activeYear2.id : null)]
     )
     const [newLead] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId])
     res.status(201).json(newLead[0])
@@ -188,10 +209,11 @@ async function createPublicLead(req, res, next) {
     if (!school.length) return res.status(404).json({ message: 'School not found' })
 
     const { ai_score, ai_label } = calculateAIScore({ lead_source: 'Landing Page', email, child_grade, keyword: '' })
+    const [[pubYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
     await pool.execute(
-      `INSERT INTO leads (school_id, parent_name, phone, email, child_grade, lead_source, notes, ai_score, ai_label)
-       VALUES (?, ?, ?, ?, ?, 'Landing Page', ?, ?, ?)`,
-      [school_id, parent_name, phone, email||null, child_grade, message||null, ai_score, ai_label]
+      `INSERT INTO leads (school_id, parent_name, phone, email, child_grade, lead_source, notes, ai_score, ai_label, academic_year_id)
+       VALUES (?, ?, ?, ?, ?, 'Landing Page', ?, ?, ?, ?)`,
+      [school_id, parent_name, phone, email||null, child_grade, message||null, ai_score, ai_label, (pubYear ? pubYear.id : null)]
     )
     res.status(201).json({ message: 'Enquiry received. The school will contact you within 24 hours.' })
   } catch (err) { next(err) }

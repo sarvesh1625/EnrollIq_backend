@@ -19,6 +19,12 @@ async function importLeads(req, res, next) {
     )
     const importId = importLog.insertId
 
+    // Active academic year — must be stamped on every imported lead or it won't
+    // show up in Leads/Pipeline (which filter by academic_year_id) even though
+    // it will still count toward the dashboard's total_leads.
+    const [[activeYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
+    const academicYearId = activeYear ? activeYear.id : null
+
     // Score all leads with AI
     const scoredRows = await bulkScore(rows)
 
@@ -42,14 +48,15 @@ async function importLeads(req, res, next) {
 
         await pool.execute(`
           INSERT INTO leads
-            (school_id, parent_name, phone, email, child_grade, area, lead_source, keyword, notes, ai_score, ai_label, is_duplicate)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            (school_id, parent_name, phone, email, child_grade, area, lead_source, keyword, notes, ai_score, ai_label, is_duplicate, academic_year_id)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         `, [
           schoolId, row.parent_name, row.phone.toString().trim(),
           row.email || null, row.child_grade || null,
           row.area || null, row.lead_source || 'Form',
           row.keyword || null, row.notes || null,
-          row.ai_score, row.ai_label, dup.length > 0 ? 1 : 0
+          row.ai_score, row.ai_label, dup.length > 0 ? 1 : 0,
+          academicYearId
         ])
         success++
       } catch (e) {

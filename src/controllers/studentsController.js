@@ -2,9 +2,23 @@ const { pool } = require('../db/pool')
 
 async function getStudents(req, res, next) {
   try {
-    const { class: cls, status, search, limit = 100, offset = 0 } = req.query
+    const { class: cls, status, search, archived, limit = 100, offset = 0 } = req.query
     const schoolId = req.user.school_id
+    const [[activeYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
     let where = 'school_id = ?', params = [schoolId]
+    // Alumni tab: archived=1 shows exited students; default hides them
+    if (archived == 1 || archived === 'true') {
+      where += ' AND archived = 1'
+    } else {
+      where += ' AND (archived = 0 OR archived IS NULL)'
+    }
+    if (activeYear && !(archived == 1 || archived === 'true')) {
+      where += ` AND (
+        id IN (SELECT student_id FROM student_enrollments WHERE academic_year_id = ?)
+        OR id NOT IN (SELECT student_id FROM student_enrollments)
+      )`
+      params.push(activeYear.id)
+    }
 
     if (cls && cls !== 'All')       { where += ' AND class = ?';  params.push(cls) }
     if (status && status !== 'All') { where += ' AND status = ?'; params.push(status) }
@@ -59,6 +73,18 @@ async function createStudent(req, res, next) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [schoolId, name, roll, cls, section, dob||null, parent_name, parent_phone, parent_email, area]
     )
+    // auto-create an enrollment row for the active academic year so the student
+    // appears on the promotion page and in year-scoped views
+    try {
+      const [[ay]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
+      if (ay) {
+        await pool.execute(
+          `INSERT INTO student_enrollments (student_id, academic_year_id, class, section, roll_number, status)
+           VALUES (?, ?, ?, ?, ?, 'Active')`,
+          [result.insertId, ay.id, cls, section||null, roll])
+      }
+    } catch (e) { /* enrollment table may vary; don't block student creation */ }
+
     const [rows] = await pool.execute('SELECT * FROM students WHERE id = ?', [result.insertId])
     res.status(201).json(rows[0])
   } catch (err) { next(err) }

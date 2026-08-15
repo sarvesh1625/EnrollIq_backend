@@ -1,28 +1,46 @@
-# Dependencies
+# ─── Dependencies ───────────────────────────────
 node_modules/
 
-# Environment (NEVER commit — contains DB password & secrets)
+# ─── Environment / secrets (NEVER commit) ───────
 .env
 .env.local
 .env.*.local
+*.pem
+*.key
 
-# Logs
+# ─── Logs ───────────────────────────────────────
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# OS files
+# ─── OS files ───────────────────────────────────
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Editor
+# ─── Editors ────────────────────────────────────
 .vscode/
 .idea/
+*.swp
 
-# Uploaded files (user photos — shouldn't be in git)
+# ─── Uploaded / generated files ─────────────────
 uploads/
-
-# Build output
 dist/
 build/
+tmp/
+
+# ─── One-off debug & inspection scripts ─────────
+# (throwaway helpers we made while troubleshooting — not part of the app)
+check_*.js
+debug_*.js
+dump*.ps1
+reset_*.js
+test_*.js
+set_plan.js
+wipe_data.js
+
+# NOTE: migration & schema scripts are intentionally NOT ignored —
+# runAiExamSchema.js, migrate_*.js, backfill*.js stay in the repo
+# because you may need to run them to set up the database.

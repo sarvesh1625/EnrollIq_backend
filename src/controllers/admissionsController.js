@@ -4,7 +4,9 @@ async function getAdmissions(req, res, next) {
   try {
     const { status, search, limit = 50, offset = 0 } = req.query
     const schoolId = req.user.school_id
+    const [[activeYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
     let where = 'a.school_id = ?', params = [schoolId]
+    if (activeYear) { where += ' AND a.academic_year_id = ?'; params.push(activeYear.id) }
 
     if (status && status !== 'All') { where += ' AND a.status = ?'; params.push(status) }
     if (search) {
@@ -61,11 +63,12 @@ async function createAdmission(req, res, next) {
     const { lead_id, student_name, date_of_birth, grade_applied, parent_name, parent_phone, parent_email, notes } = req.body
     const schoolId = req.user.school_id
     if (!student_name || !grade_applied) return res.status(400).json({ message: 'student_name and grade_applied are required' })
+    const [[admYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
 
     const [result] = await pool.execute(
-      `INSERT INTO admissions (school_id, lead_id, student_name, date_of_birth, grade_applied, parent_name, parent_phone, parent_email, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [schoolId, lead_id||null, student_name, date_of_birth||null, grade_applied, parent_name, parent_phone, parent_email, notes]
+      `INSERT INTO admissions (school_id, lead_id, student_name, date_of_birth, grade_applied, parent_name, parent_phone, parent_email, notes, academic_year_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [schoolId, lead_id||null, student_name, date_of_birth||null, grade_applied, parent_name, parent_phone, parent_email, notes, (admYear ? admYear.id : null)]
     )
     if (lead_id) await pool.execute(`UPDATE leads SET status='Admission' WHERE id=? AND school_id=?`, [lead_id, schoolId])
     const [rows] = await pool.execute('SELECT * FROM admissions WHERE id = ?', [result.insertId])
@@ -97,18 +100,9 @@ async function updateAdmission(req, res, next) {
     )
     if (result.affectedRows === 0) return res.status(404).json({ message: 'Admission not found' })
 
-    if (status === 'Admitted') {
-      const [adm] = await pool.execute('SELECT * FROM admissions WHERE id = ?', [req.params.id])
-      const a     = adm[0]
-      const [ex]  = await pool.execute('SELECT id FROM students WHERE admission_id = ?', [a.id])
-      if (!ex.length) {
-        await pool.execute(
-          `INSERT INTO students (school_id, admission_id, name, class, dob, parent_name, parent_phone, parent_email)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [a.school_id, a.id, a.student_name, a.grade_applied, a.date_of_birth, a.parent_name, a.parent_phone, a.parent_email]
-        )
-      }
-    }
+    // NOTE: marking an admission "Admitted" no longer auto-creates a student.
+    // The student is created ONLY by the explicit "Enroll as Student" action
+    // (convert-to-student), which prevents duplicate student records.
 
     const [rows] = await pool.execute('SELECT * FROM admissions WHERE id = ?', [req.params.id])
     res.json(rows[0])

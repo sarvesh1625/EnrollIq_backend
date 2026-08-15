@@ -18,7 +18,13 @@ async function getPayments(req, res, next) {
 
     await pool.execute(`UPDATE payments SET status='Overdue' WHERE school_id=? AND status='Pending' AND due_date < CURDATE()`, [schoolId])
 
+    const [[activeYear]] = await pool.query('SELECT id, name FROM academic_years WHERE is_active=1 LIMIT 1')
+    const ayId = activeYear ? activeYear.id : null
     let where = 'p.school_id = ?', params = [schoolId]
+    if (ayId) {
+      where += " AND (p.academic_year_id = ? OR p.academic_year_id IS NULL OR (p.academic_year_id < ? AND p.status IN ('Pending','Overdue')))"
+      params.push(ayId, ayId)
+    }
     if (status && status !== 'All') { where += ' AND p.status = ?'; params.push(status) }
     if (search) {
       where += ' AND (s.name LIKE ? OR s.roll_number LIKE ?)'
@@ -26,10 +32,16 @@ async function getPayments(req, res, next) {
     }
 
     const [payments] = await pool.execute(
-      `SELECT p.*, s.name AS student_name, s.class, s.roll_number FROM payments p
+      `SELECT p.*, s.name AS student_name, s.class, s.roll_number,
+              ay.name AS fee_year,
+              CASE WHEN p.academic_year_id IS NOT NULL AND ? IS NOT NULL AND p.academic_year_id < ?
+                   THEN CONCAT('Carried forward from ', COALESCE(ay.name,'previous year'))
+                   ELSE NULL END AS carried_forward_label
+       FROM payments p
        LEFT JOIN students s ON s.id = p.student_id
-       WHERE ${where} ORDER BY p.due_date DESC LIMIT ? OFFSET ?`,
-      [...params, parseInt(limit), parseInt(offset)]
+       LEFT JOIN academic_years ay ON ay.id = p.academic_year_id
+       WHERE ${where} ORDER BY (p.academic_year_id < ?) DESC, p.due_date DESC LIMIT ? OFFSET ?`,
+      [ayId, ayId, ...params, ayId, parseInt(limit), parseInt(offset)]
     )
     const [[count]] = await pool.execute(`SELECT COUNT(*) AS total FROM payments p LEFT JOIN students s ON s.id=p.student_id WHERE ${where}`, params)
     res.json({ payments, total: count.total })
@@ -41,9 +53,10 @@ async function createPayment(req, res, next) {
     const { student_id, fee_type, amount, due_date, payment_mode } = req.body
     const schoolId = req.user.school_id
     if (!student_id || !amount || !fee_type) return res.status(400).json({ message: 'student_id, fee_type and amount are required' })
+    const [[payYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
     const [result] = await pool.execute(
-      `INSERT INTO payments (school_id, student_id, fee_type, amount, due_date, payment_mode, status) VALUES (?, ?, ?, ?, ?, ?, 'Pending')`,
-      [schoolId, student_id, fee_type, amount, due_date||null, payment_mode||null]
+      `INSERT INTO payments (school_id, student_id, fee_type, amount, due_date, payment_mode, status, academic_year_id) VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?)`,
+      [schoolId, student_id, fee_type, amount, due_date||null, payment_mode||null, payYear ? payYear.id : null]
     )
     const [rows] = await pool.execute('SELECT * FROM payments WHERE id = ?', [result.insertId])
     res.status(201).json(rows[0])

@@ -83,18 +83,32 @@ exports.saveTemplate = async (req, res, next) => {
 exports.listStudents = async (req, res, next) => {
   try {
     const cls = req.query.class
+    const [[activeYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
+    const ayId = activeYear ? activeYear.id : null
     const params = []
-    let where = ''
-    if (cls && cls !== 'All') { where = 'WHERE s.class = ?'; params.push(cls) }
+    let where = 'WHERE 1=1'
+    if (cls && cls !== 'All') { where += ' AND s.class = ?'; params.push(cls) }
+    if (ayId) {
+      where += ` AND (
+        s.id IN (SELECT student_id FROM student_enrollments WHERE academic_year_id = ?)
+        OR s.id NOT IN (SELECT student_id FROM student_enrollments)
+      )`
+      params.push(ayId)
+    }
+    // kit-issue counts scoped to the active year (fall back to any if unstamped)
+    const yearJoin = ayId
+      ? 'AND (k.academic_year_id = ? OR k.academic_year_id IS NULL)'
+      : ''
+    const joinParams = ayId ? [ayId] : []
     const [rows] = await pool.execute(
       `SELECT s.id, s.name, s.roll_number, s.class, s.section,
               COUNT(k.id)                                    AS total_items,
               SUM(k.status = 'Issued')                       AS issued_items,
               SUM(k.payment_status = 'Paid')                 AS paid_items
        FROM students s
-       LEFT JOIN student_kit_issues k ON k.student_id = s.id
+       LEFT JOIN student_kit_issues k ON k.student_id = s.id ${yearJoin}
        ${where}
-       GROUP BY s.id ORDER BY s.class, s.section, s.name`, params)
+       GROUP BY s.id ORDER BY s.class, s.section, s.name`, [...joinParams, ...params])
     res.json(rows)
   } catch (e) { next(e) }
 }

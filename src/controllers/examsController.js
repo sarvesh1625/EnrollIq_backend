@@ -9,10 +9,10 @@ async function getExams(req, res, next) {
              COUNT(DISTINCT em.subject_id) AS subjects_count
       FROM   exams e
       LEFT JOIN exam_marks em ON em.exam_id = e.id
-      WHERE  e.school_id=?
+      WHERE  e.school_id=? AND (e.academic_year_id = ? OR e.academic_year_id IS NULL)
       GROUP  BY e.id
       ORDER  BY e.start_date DESC
-    `, [req.user.school_id])
+    `, [req.user.school_id, (await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1'))[0][0]?.id || null])
     res.json(exams)
   } catch (err) { next(err) }
 }
@@ -24,9 +24,9 @@ async function createExam(req, res, next) {
     if (!name) return res.status(400).json({ message: 'name is required' })
 
     const [result] = await pool.execute(
-      `INSERT INTO exams (school_id, name, class_name, exam_type, start_date, end_date, academic_year)
-       VALUES (?,?,?,?,?,?,?)`,
-      [req.user.school_id, name, class_name||null, exam_type||'Unit Test', start_date||null, end_date||null, academic_year||'2025-26']
+      `INSERT INTO exams (school_id, name, class_name, exam_type, start_date, end_date, academic_year, academic_year_id)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [req.user.school_id, name, class_name||null, exam_type||'Unit Test', start_date||null, end_date||null, academic_year||'2025-26', (await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1'))[0][0]?.id || null]
     )
     const [rows] = await pool.execute('SELECT * FROM exams WHERE id=?', [result.insertId])
     res.status(201).json(rows[0])

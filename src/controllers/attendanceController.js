@@ -1,4 +1,5 @@
 const { pool } = require('../db/pool')
+const { notifyParent } = require('../services/notificationService')
 
 // GET /api/attendance?date=&class=
 async function getAttendance(req, res, next) {
@@ -57,6 +58,18 @@ async function markBulk(req, res, next) {
         ON DUPLICATE KEY UPDATE status=VALUES(status), notes=VALUES(notes), marked_by=VALUES(marked_by)
       `, [schoolId, student_id, targetDate, status || 'Present', notes || null, req.user.id])
       success++
+
+      // notify parent if the child is marked Absent
+      if ((status || '') === 'Absent') {
+        try {
+          const [[st]] = await pool.execute('SELECT name, parent_phone FROM students WHERE id=?', [student_id])
+          if (st?.parent_phone) {
+            notifyParent({ schoolId, studentId: student_id, parentPhone: st.parent_phone,
+              type: 'absent', title: `${st.name} marked absent`,
+              body: `Marked absent on ${targetDate}`, link: 'attendance' })
+          }
+        } catch {}
+      }
     }
 
     res.json({ message: `Attendance marked for ${success} students`, date: targetDate })

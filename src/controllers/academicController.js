@@ -70,6 +70,7 @@ exports.candidates = async (req, res, next) => {
       FROM student_enrollments e
       JOIN students s ON s.id = e.student_id
       WHERE ${where}
+        AND (s.archived = 0 OR s.archived IS NULL)
       ORDER BY e.class, e.section, s.name`, params)
 
     rows.forEach(r => { r.suggested_class = nextClass(r.class) })
