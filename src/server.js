@@ -9,17 +9,21 @@ const PORT = process.env.PORT || 5000
 // ── Middleware ────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: function(origin, callback) {
+    // allow non-browser clients (mobile app, curl) with no origin
     if (!origin) return callback(null, true)
     const allowed = [
       'http://localhost:5173',
       'http://localhost:8081',
       'http://localhost:19006',
-      process.env.CLIENT_URL,
+      process.env.CLIENT_URL,          // your Hostinger frontend domain
     ].filter(Boolean)
-    if (allowed.includes(origin) || origin.startsWith('http://192.168.')) {
+    // allow configured origins + local dev network (Expo on LAN)
+    if (allowed.includes(origin) || origin.startsWith('http://192.168.') || origin.startsWith('http://10.')) {
       return callback(null, true)
     }
-    return callback(null, true)
+    // In production, reject unknown origins. Set ALLOW_ALL_ORIGINS=true to relax.
+    if (process.env.ALLOW_ALL_ORIGINS === 'true') return callback(null, true)
+    return callback(new Error('Not allowed by CORS'))
   },
   credentials: true,
 }))
@@ -80,6 +84,3 @@ app.listen(PORT, () => {
   console.log(`🗄️   Database        → cmr_of_school (MySQL)`)
   console.log(`🌐  Frontend origin  → ${process.env.CLIENT_URL || 'http://localhost:5173'}\n`)
 })
-
-
-
