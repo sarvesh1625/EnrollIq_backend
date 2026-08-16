@@ -18,11 +18,25 @@
  *     e.g. "meta-llama/llama-4-maverick-17b-128e-instruct" (production)
  *     Avoid preview-only vision models (e.g. qwen/qwen3.6-27b) for grading
  *     real student marks — preview models aren't guaranteed stable.
+ *
+ * NOTE: the Groq client is created lazily (getGroq()) instead of at
+ * module load time. This means a missing GROQ_API_KEY no longer crashes
+ * the whole server on startup — it only throws when an AI feature is
+ * actually used, so the rest of the app keeps working.
  */
 
 const Groq = require('groq-sdk')
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+let _groq = null
+function getGroq() {
+  if (!_groq) {
+    if (!process.env.GROQ_API_KEY) {
+      throw new Error('GROQ_API_KEY is not set — AI features are unavailable')
+    }
+    _groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+  }
+  return _groq
+}
 
 const TEXT_MODEL   = process.env.GROQ_TEXT_MODEL   || 'llama-3.3-70b-versatile'
 const VISION_MODEL = process.env.GROQ_VISION_MODEL || 'meta-llama/llama-4-maverick-17b-128e-instruct'
@@ -63,7 +77,7 @@ Generate a well-structured question paper. Respond with ONLY valid JSON in exact
 
 Make sure the marks across all questions sum to approximately ${total_marks}. Keep language age-appropriate for ${class_name}.`
 
-  const completion = await groq.chat.completions.create({
+  const completion = await getGroq().chat.completions.create({
     model: TEXT_MODEL,
     messages: [{ role: 'user', content: prompt }],
     response_format: { type: 'json_object' },
@@ -108,7 +122,7 @@ Respond with ONLY valid JSON in exactly this shape:
   ]
 }`
 
-  const completion = await groq.chat.completions.create({
+  const completion = await getGroq().chat.completions.create({
     model: VISION_MODEL,
     messages: [{
       role: 'user',
@@ -154,7 +168,7 @@ Respond with ONLY valid JSON in exactly this shape:
   ]
 }`
 
-  const completion = await groq.chat.completions.create({
+  const completion = await getGroq().chat.completions.create({
     model: TEXT_MODEL,
     messages: [{ role: 'user', content: prompt }],
     response_format: { type: 'json_object' },
@@ -192,7 +206,7 @@ Analyze this and respond with ONLY valid JSON in exactly this shape:
 
 Use "Urgent" only if a subject is failing (below 35%) or there's a sharp, consistent decline. Use "Watch" for a single weak subject or early signs of decline.`
 
-  const completion = await groq.chat.completions.create({
+  const completion = await getGroq().chat.completions.create({
     model: TEXT_MODEL,
     messages: [{ role: 'user', content: prompt }],
     response_format: { type: 'json_object' },
