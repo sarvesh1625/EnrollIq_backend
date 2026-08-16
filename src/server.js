@@ -15,6 +15,7 @@ app.use(cors({
       'http://localhost:5173',
       'http://localhost:8081',
       'http://localhost:19006',
+      'CLIENT_URL=https://enrolliq.io',
       process.env.CLIENT_URL,          // your Hostinger frontend domain
     ].filter(Boolean)
     // allow configured origins + local dev network (Expo on LAN)
