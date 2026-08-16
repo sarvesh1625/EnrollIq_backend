@@ -1,5 +1,6 @@
 const mysql = require('mysql2/promise')
 require('dotenv').config()
+console.log('DEBUG ENV CHECK:', process.env.DB_NAME, process.env.DB_HOST, process.env.DB_PASSWORD ? 'password-set' : 'password-missing')
 
 const pool = mysql.createPool({
   host:     process.env.DB_HOST     || 'localhost',
