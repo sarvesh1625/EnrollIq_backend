@@ -9,11 +9,16 @@ async function protect(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
     const [rows]  = await pool.execute(
-      'SELECT id, school_id, name, email, role FROM users WHERE id = ? AND is_active = 1',
+      'SELECT id, school_id, active_school_id, name, email, role FROM users WHERE id = ? AND is_active = 1',
       [decoded.userId]
     )
     if (!rows.length) return res.status(401).json({ message: 'User not found or deactivated' })
-    req.user = rows[0]
+    const u = rows[0]
+    // Branch support: the "effective" school is the active branch if set, else the home school.
+    // Every route scopes by req.user.school_id, so this switches the whole app to the chosen branch.
+    u.home_school_id = u.school_id
+    u.school_id = u.active_school_id || u.school_id
+    req.user = u
     next()
   } catch (err) {
     return res.status(401).json({ message: 'Invalid or expired token' })
