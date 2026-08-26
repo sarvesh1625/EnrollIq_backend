@@ -82,14 +82,72 @@ async function sendAnnouncement(req, res, next) {
 }
 
 async function getNotifications(req, res, next) {
+  // Live activity feed generated from real recent events (no notification_log needed):
+  // new leads, new admissions, fee payments, and today's absentees.
   try {
     const schoolId = req.user.school_id
-    const [notifications] = await pool.execute(
-      'SELECT * FROM notification_log WHERE school_id = ? ORDER BY created_at DESC LIMIT 50',
-      [schoolId]
-    )
-    const [[unread]] = await pool.execute('SELECT COUNT(*) AS c FROM notification_log WHERE school_id=? AND is_read=0', [schoolId])
-    res.json({ notifications, unread_count: unread.c })
+    const items = []
+    const safe = async (fn) => { try { await fn() } catch (e) { /* ignore missing table */ } }
+
+    // 1) Recent new leads
+    await safe(async () => {
+      const [rows] = await pool.execute(
+        `SELECT id, name, child_grade, source, created_at
+         FROM leads WHERE school_id=? AND created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+         ORDER BY created_at DESC LIMIT 12`, [schoolId])
+      for (const r of rows) items.push({
+        id: `lead-${r.id}`, type: 'lead_alert',
+        title: `New lead: ${r.name}`,
+        body: [r.child_grade, r.source].filter(Boolean).join(' \u00b7 ') || 'New enquiry',
+        is_read: 0, created_at: r.created_at,
+      })
+    })
+
+    // 2) Recent admissions
+    await safe(async () => {
+      const [rows] = await pool.execute(
+        `SELECT a.id, a.created_at, COALESCE(a.student_name, s.name) AS name
+         FROM admissions a LEFT JOIN students s ON s.id = a.student_id
+         WHERE a.school_id=? AND a.created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+         ORDER BY a.created_at DESC LIMIT 10`, [schoolId])
+      for (const r of rows) items.push({
+        id: `adm-${r.id}`, type: 'admission_update',
+        title: `New admission${r.name ? ': ' + r.name : ''}`,
+        body: 'Admission confirmed', is_read: 0, created_at: r.created_at,
+      })
+    })
+
+    // 3) Recent fee payments
+    await safe(async () => {
+      const [rows] = await pool.execute(
+        `SELECT p.id, p.paid_amount, p.created_at, s.name
+         FROM payments p LEFT JOIN students s ON s.id = p.student_id
+         WHERE p.school_id=? AND p.paid_amount > 0
+           AND p.created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+         ORDER BY p.created_at DESC LIMIT 10`, [schoolId])
+      for (const r of rows) items.push({
+        id: `pay-${r.id}`, type: 'fee_reminder',
+        title: `Fee received${r.name ? ': ' + r.name : ''}`,
+        body: `\u20b9${Number(r.paid_amount).toLocaleString('en-IN')} paid`,
+        is_read: 0, created_at: r.created_at,
+      })
+    })
+
+    // 4) Today's absentees (summary)
+    await safe(async () => {
+      const [[a]] = await pool.execute(
+        `SELECT COUNT(*) c FROM class_attendance
+         WHERE school_id=? AND date=CURDATE() AND status='Absent'`, [schoolId])
+      if (a && a.c > 0) items.push({
+        id: `abs-today`, type: 'system',
+        title: `${a.c} student${a.c>1?'s':''} absent today`,
+        body: 'Check attendance for follow-up', is_read: 0, created_at: new Date(),
+      })
+    })
+
+    items.sort((x, y) => new Date(y.created_at) - new Date(x.created_at))
+    const notifications = items.slice(0, 20)
+    res.json({ notifications, unread_count: notifications.length })
   } catch (err) { next(err) }
 }
 
