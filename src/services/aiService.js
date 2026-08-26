@@ -12,12 +12,11 @@
  * before deploying, since Groq's lineup changes frequently and some
  * vision models are marked "preview" (evaluation only, not production).
  * As of writing:
- *   - Text tasks (paper generation, insights): a strong instruct model,
- *     e.g. "llama-3.3-70b-versatile" or "openai/gpt-oss-120b"
- *   - Vision tasks (answer sheet OCR+grading): a vision-capable model,
- *     e.g. "meta-llama/llama-4-maverick-17b-128e-instruct" (production)
- *     Avoid preview-only vision models (e.g. qwen/qwen3.6-27b) for grading
- *     real student marks — preview models aren't guaranteed stable.
+ *   - Text tasks (paper generation, insights): openai/gpt-oss-120b (current)
+ *   - Vision tasks (answer sheet OCR+grading): qwen/qwen3.6-27b (current vision)
+ *   NOTE (Aug 2026): llama-3.3-70b-versatile and llama-4-maverick were
+ *   DEPRECATED and shut down by Groq. Updated to current models above.
+ *   Check https://console.groq.com/docs/models before deploying.
  *
  * NOTE: the Groq client is created lazily (getGroq()) instead of at
  * module load time. This means a missing GROQ_API_KEY no longer crashes
@@ -38,8 +37,8 @@ function getGroq() {
   return _groq
 }
 
-const TEXT_MODEL   = process.env.GROQ_TEXT_MODEL   || 'llama-3.3-70b-versatile'
-const VISION_MODEL = process.env.GROQ_VISION_MODEL || 'meta-llama/llama-4-maverick-17b-128e-instruct'
+const TEXT_MODEL   = process.env.GROQ_TEXT_MODEL   || 'openai/gpt-oss-120b'
+const VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.6-27b'
 
 // Strip stray markdown fences etc, just in case, even though we ask for JSON mode.
 function extractJSON(text) {
