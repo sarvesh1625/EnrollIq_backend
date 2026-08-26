@@ -27,18 +27,9 @@ const imgFilter = (req, file, cb) => {
 const uploadBanner  = multer({ storage: bannerStorage,  limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
 const uploadGallery = multer({ storage: galleryStorage, limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
 
-const facultyDir = path.join(__dirname, '../../uploads/faculty')
-if (!fs.existsSync(facultyDir)) fs.mkdirSync(facultyDir, { recursive: true })
-const facultyStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, facultyDir),
-  filename:    (req, file, cb) => cb(null, `faculty_${req.user?.school_id}_${Date.now()}_${Math.random().toString(36).slice(2)}${path.extname(file.originalname)}`)
-})
-const uploadFaculty = multer({ storage: facultyStorage, limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
-
 // Serve static files
 router.use('/banners', require('express').static(uploadDir))
 router.use('/gallery', require('express').static(galleryDir))
-router.use('/faculty-photos', require('express').static(facultyDir))
 
 // ── Haversine ─────────────────────────────────────────────────────────────────
 function dist(lat1,lon1,lat2,lon2) {
@@ -79,17 +70,12 @@ router.get('/schools/:id', async (req, res, next) => {
     if (!schools.length) return res.status(404).json({message:'School not found'})
     const sc = schools[0]
     sc.facilities = sc.facilities ? sc.facilities.split(',').map(f=>f.trim()) : []
-    // highlights is stored as a JSON string of [{heading,content}]; the landing page parses it, so pass it through untouched
+    sc.highlights  = sc.highlights  ? sc.highlights.split(',').map(h=>h.trim())  : []
 
     // Gallery images
     const [gallery] = await pool.execute(
       `SELECT * FROM school_gallery WHERE school_id=? ORDER BY sort_order,created_at`, [sc.id])
     sc.gallery = gallery
-
-    const [faculty] = await pool.execute(
-      `SELECT id, name, role, bio, photo_url FROM school_faculty
-       WHERE school_id=? AND is_active=1 ORDER BY sort_order, id`, [sc.id])
-    sc.faculty = faculty
 
     res.json(sc)
   } catch(err){next(err)}
@@ -203,61 +189,6 @@ router.patch('/school-profile', protect, async (req, res, next) => {
   } catch(err){next(err)}
 })
 
-// ── FACULTY ───────────────────────────────────────────────────────────────────
-
-// Get this school's faculty (admin)
-router.get('/faculty', protect, async (req, res, next) => {
-  try {
-    const [rows] = await pool.execute(
-      'SELECT * FROM school_faculty WHERE school_id=? AND is_active=1 ORDER BY sort_order, id',
-      [req.user.school_id])
-    res.json(rows)
-  } catch (err) { next(err) }
-})
-
-// Add a faculty member (with optional photo)
-router.post('/faculty', protect, uploadFaculty.single('photo'), async (req, res, next) => {
-  try {
-    const { name, role, bio } = req.body
-    if (!name || !name.trim()) return res.status(400).json({ message: 'Name is required' })
-    const photoUrl = req.file ? `/api/discovery/faculty-photos/${req.file.filename}` : null
-    const [result] = await pool.execute(
-      `INSERT INTO school_faculty (school_id, name, role, bio, photo_url) VALUES (?,?,?,?,?)`,
-      [req.user.school_id, name.trim(), role||null, bio||null, photoUrl])
-    res.status(201).json({ id: result.insertId, name: name.trim(), role: role||null, bio: bio||null, photo_url: photoUrl })
-  } catch (err) { next(err) }
-})
-
-// Update a faculty member (optional new photo)
-router.put('/faculty/:id', protect, uploadFaculty.single('photo'), async (req, res, next) => {
-  try {
-    const { name, role, bio } = req.body
-    const [own] = await pool.execute('SELECT photo_url FROM school_faculty WHERE id=? AND school_id=?',
-      [req.params.id, req.user.school_id])
-    if (!own.length) return res.status(404).json({ message: 'Faculty member not found' })
-    const photoUrl = req.file ? `/api/discovery/faculty-photos/${req.file.filename}` : own[0].photo_url
-    await pool.execute(
-      `UPDATE school_faculty SET name=?, role=?, bio=?, photo_url=? WHERE id=? AND school_id=?`,
-      [name, role||null, bio||null, photoUrl, req.params.id, req.user.school_id])
-    res.json({ id: Number(req.params.id), name, role, bio, photo_url: photoUrl })
-  } catch (err) { next(err) }
-})
-
-// Delete a faculty member
-router.delete('/faculty/:id', protect, async (req, res, next) => {
-  try {
-    const [rows] = await pool.execute('SELECT * FROM school_faculty WHERE id=? AND school_id=?',
-      [req.params.id, req.user.school_id])
-    if (!rows.length) return res.status(404).json({ message: 'Faculty member not found' })
-    if (rows[0].photo_url) {
-      const filePath = path.join(facultyDir, path.basename(rows[0].photo_url))
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-    }
-    await pool.execute('DELETE FROM school_faculty WHERE id=?', [req.params.id])
-    res.json({ success: true })
-  } catch (err) { next(err) }
-})
-
 module.exports = router
 // Add these routes to discovery.js
 
@@ -357,7 +288,7 @@ router.post('/chatbot', async (req, res, next) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + process.env.GROQ_API_KEY },
           body: JSON.stringify({
-            model: 'llama-3.1-8b-instant',
+            model: process.env.GROQ_TEXT_MODEL || 'openai/gpt-oss-120b',
             max_tokens: 200,
             messages: [
               { role: 'system', content: systemPrompt },
