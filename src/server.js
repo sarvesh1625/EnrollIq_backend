@@ -64,6 +64,7 @@ app.use('/api/tracking', require('./routes/tracking'))
 app.use('/api/academic', require('./routes/academic'))
 app.use('/api/assistant', require('./routes/assistant'))
 app.use('/api/branches', require('./routes/branches'))
+app.use('/api/demo-request', require('./routes/demoRequest'))
 
 const parentRouter                 = require('./routes/parent')
 const { router: driverRouter }     = require('./routes/driver')
