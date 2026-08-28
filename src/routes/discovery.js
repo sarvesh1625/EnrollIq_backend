@@ -5,31 +5,32 @@ const path    = require('path')
 const fs      = require('fs')
 const { protect } = require('../middleware/auth')
 
-// ── Upload setup ──────────────────────────────────────────────────────────────
-const uploadDir = path.join(__dirname, '../../uploads/banners')
-const galleryDir = path.join(__dirname, '../../uploads/gallery')
-if (!fs.existsSync(uploadDir))  fs.mkdirSync(uploadDir,  { recursive: true })
-if (!fs.existsSync(galleryDir)) fs.mkdirSync(galleryDir, { recursive: true })
+// ── Upload setup — Cloudinary (persists across redeploys) ─────────────────────
+const cloudinary = require('cloudinary').v2
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+})
 
-const bannerStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename:    (req, file, cb) => cb(null, `school_${req.params.school_id}_${Date.now()}${path.extname(file.originalname)}`)
-})
-const galleryStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, galleryDir),
-  filename:    (req, file, cb) => cb(null, `gallery_${req.user?.school_id}_${Date.now()}_${Math.random().toString(36).slice(2)}${path.extname(file.originalname)}`)
-})
+const memStorage = multer.memoryStorage()
 const imgFilter = (req, file, cb) => {
   ['.jpg','.jpeg','.png','.webp'].includes(path.extname(file.originalname).toLowerCase())
     ? cb(null, true) : cb(new Error('Images only'))
 }
 
-const uploadBanner  = multer({ storage: bannerStorage,  limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
-const uploadGallery = multer({ storage: galleryStorage, limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
+const uploadBanner  = multer({ storage: memStorage, limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
+const uploadGallery = multer({ storage: memStorage, limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
 
-// Serve static files
-router.use('/banners', require('express').static(uploadDir))
-router.use('/gallery', require('express').static(galleryDir))
+function uploadBufferToCloudinary(buffer, folder, publicId) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder, public_id: publicId, overwrite: true, resource_type: 'image' },
+      (err, result) => err ? reject(err) : resolve(result)
+    )
+    stream.end(buffer)
+  })
+}
 
 // ── Haversine ─────────────────────────────────────────────────────────────────
 function dist(lat1,lon1,lat2,lon2) {
@@ -115,7 +116,8 @@ router.post('/upload-banner/:school_id', protect, uploadBanner.single('banner'),
     if (req.user.school_id != req.params.school_id && req.user.role !== 'superadmin')
       return res.status(403).json({message:'Can only upload for your own school'})
     if (!req.file) return res.status(400).json({message:'No image uploaded'})
-    const bannerUrl = `/api/discovery/banners/${req.file.filename}`
+    const result = await uploadBufferToCloudinary(req.file.buffer, 'enrolliq/banners', `school_${req.params.school_id}_${Date.now()}`)
+    const bannerUrl = result.secure_url
     await pool.execute('UPDATE schools SET banner_url=? WHERE id=?',[bannerUrl,req.params.school_id])
     res.json({success:true,banner_url:bannerUrl})
   } catch(err){next(err)}
@@ -129,7 +131,10 @@ router.post('/upload-gallery', protect, uploadGallery.array('images', 10), async
     const { caption } = req.body
     const inserted = []
     for (const file of req.files) {
-      const imageUrl = `/api/discovery/gallery/${file.filename}`
+      const cldResult = await uploadBufferToCloudinary(
+        file.buffer, 'enrolliq/gallery',
+        `gallery_${schoolId}_${Date.now()}_${Math.random().toString(36).slice(2)}`)
+      const imageUrl = cldResult.secure_url
       const [result] = await pool.execute(
         `INSERT INTO school_gallery (school_id,image_url,caption) VALUES (?,?,?)`,
         [schoolId, imageUrl, caption||null])
@@ -144,9 +149,11 @@ router.delete('/gallery/:id', protect, async (req, res, next) => {
   try {
     const [rows] = await pool.execute('SELECT * FROM school_gallery WHERE id=? AND school_id=?',[req.params.id,req.user.school_id])
     if (!rows.length) return res.status(404).json({message:'Image not found'})
-    // Delete file
-    const filePath = path.join(galleryDir, path.basename(rows[0].image_url))
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    // Best-effort: remove from Cloudinary too (derive public_id from the stored URL)
+    try {
+      const m = rows[0].image_url.match(/\/enrolliq\/gallery\/([^./]+)\.[a-zA-Z0-9]+$/)
+      if (m) await cloudinary.uploader.destroy(`enrolliq/gallery/${m[1]}`)
+    } catch {}
     await pool.execute('DELETE FROM school_gallery WHERE id=?',[req.params.id])
     res.json({success:true})
   } catch(err){next(err)}
