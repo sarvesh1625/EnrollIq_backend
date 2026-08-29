@@ -21,6 +21,7 @@ const imgFilter = (req, file, cb) => {
 
 const uploadBanner  = multer({ storage: memStorage, limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
 const uploadGallery = multer({ storage: memStorage, limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
+const uploadFacultyPhoto = multer({ storage: memStorage, limits:{fileSize:5*1024*1024}, fileFilter: imgFilter })
 
 function uploadBufferToCloudinary(buffer, folder, publicId) {
   return new Promise((resolve, reject) => {
@@ -78,6 +79,12 @@ router.get('/schools/:id', async (req, res, next) => {
       `SELECT * FROM school_gallery WHERE school_id=? ORDER BY sort_order,created_at`, [sc.id])
     sc.gallery = gallery
 
+    // Faculty (only active members shown publicly)
+    const [faculty] = await pool.execute(
+      `SELECT id,name,role AS designation,subject,years_experience,bio,photo_url
+       FROM school_faculty WHERE school_id=? AND is_active=1 ORDER BY sort_order,created_at`, [sc.id])
+    sc.faculty = faculty
+
     res.json(sc)
   } catch(err){next(err)}
 })
@@ -98,10 +105,14 @@ router.post('/enquire', async (req, res, next) => {
     const ai_label=ai_score>=75?'Hot':ai_score>=55?'Warm':'Cold'
     const [dup] = await pool.execute(`SELECT id FROM leads WHERE school_id=? AND phone=? AND created_at>DATE_SUB(NOW(),INTERVAL 30 DAY)`,[school_id,phone])
 
+    // IMPORTANT: must set academic_year_id, or the dashboard's getLeads/getLeadStats
+    // (which filter by the active academic year) will silently never show this lead.
+    const [[activeYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
+
     const [result] = await pool.execute(
-      `INSERT INTO leads (school_id,parent_name,phone,email,child_grade,area,lead_source,notes,ai_score,ai_label,is_duplicate,status)
-       VALUES (?,?,?,?,?,?,'Discovery',?,?,?,?,'New')`,
-      [school_id,parent_name,phone,email||null,child_grade||null,area||null,message||null,ai_score,ai_label,dup.length>0?1:0])
+      `INSERT INTO leads (school_id,parent_name,phone,email,child_grade,area,lead_source,notes,ai_score,ai_label,is_duplicate,status,academic_year_id)
+       VALUES (?,?,?,?,?,?,'Discovery',?,?,?,?,'New',?)`,
+      [school_id,parent_name,phone,email||null,child_grade||null,area||null,message||null,ai_score,ai_label,dup.length>0?1:0,(activeYear?activeYear.id:null)])
 
     res.status(201).json({success:true,lead_id:result.insertId,school_name:schools[0].name,ai_score,ai_label,
       message:`Thank you! ${schools[0].name} will contact you within 24 hours.`})
@@ -141,6 +152,61 @@ router.post('/upload-gallery', protect, uploadGallery.array('images', 10), async
       inserted.push({id:result.insertId, image_url:imageUrl, caption:caption||null})
     }
     res.status(201).json({success:true, images:inserted})
+  } catch(err){next(err)}
+})
+
+// ── FACULTY ──────────────────────────────────────────────────────────────────
+
+// Add a faculty member
+// NOTE: table columns are name, role (designation), subject, years_experience, bio, photo_url, is_active
+router.post('/faculty', protect, uploadFacultyPhoto.single('photo'), async (req, res, next) => {
+  try {
+    const schoolId = req.user.school_id
+    const { name, designation, subject, years_experience, bio } = req.body
+    if (!name?.trim()) return res.status(400).json({message:'name required'})
+
+    let photoUrl = null
+    if (req.file) {
+      const result = await uploadBufferToCloudinary(req.file.buffer, 'enrolliq/faculty', `faculty_${schoolId}_${Date.now()}`)
+      photoUrl = result.secure_url
+    }
+
+    const [result] = await pool.execute(
+      `INSERT INTO school_faculty (school_id,name,role,subject,years_experience,bio,photo_url) VALUES (?,?,?,?,?,?,?)`,
+      [schoolId, name.trim(), designation||null, subject||null, years_experience||null, bio||null, photoUrl])
+
+    res.status(201).json({
+      id: result.insertId, name: name.trim(), designation: designation||null,
+      subject: subject||null, years_experience: years_experience||null,
+      bio: bio||null, photo_url: photoUrl,
+    })
+  } catch(err){next(err)}
+})
+
+// List faculty (admin — own school, includes inactive so they can be re-enabled later)
+router.get('/faculty', protect, async (req, res, next) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT id,name,role AS designation,subject,years_experience,bio,photo_url,is_active FROM school_faculty WHERE school_id=? ORDER BY sort_order,created_at',
+      [req.user.school_id])
+    res.json(rows)
+  } catch(err){next(err)}
+})
+
+// Delete a faculty member
+router.delete('/faculty/:id', protect, async (req, res, next) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT * FROM school_faculty WHERE id=? AND school_id=?', [req.params.id, req.user.school_id])
+    if (!rows.length) return res.status(404).json({message:'Not found'})
+    try {
+      if (rows[0].photo_url) {
+        const m = rows[0].photo_url.match(/\/enrolliq\/faculty\/([^./]+)\.[a-zA-Z0-9]+$/)
+        if (m) await cloudinary.uploader.destroy(`enrolliq/faculty/${m[1]}`)
+      }
+    } catch {}
+    await pool.execute('DELETE FROM school_faculty WHERE id=?', [req.params.id])
+    res.json({success:true})
   } catch(err){next(err)}
 })
 

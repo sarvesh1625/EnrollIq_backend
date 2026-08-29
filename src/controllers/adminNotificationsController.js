@@ -21,14 +21,14 @@ async function getNotifications(req, res, next) {
     // 1) Recent new leads (last 7 days)
     await safe(async () => {
       const [rows] = await pool.execute(
-        `SELECT id, name, child_grade, source, created_at
+        `SELECT id, parent_name, child_grade, lead_source, created_at
          FROM leads WHERE school_id=? AND created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
          ORDER BY created_at DESC LIMIT 10`, [schoolId])
       for (const r of rows) {
         items.push({
           id: `lead-${r.id}`, type: 'lead_alert',
-          title: `New lead: ${r.name}`,
-          body: [r.child_grade, r.source].filter(Boolean).join(' · ') || 'New enquiry',
+          title: `New lead: ${r.parent_name}`,
+          body: [r.child_grade, r.lead_source].filter(Boolean).join(' · ') || 'New enquiry',
           is_read: 0, created_at: r.created_at,
         })
       }
