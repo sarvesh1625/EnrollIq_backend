@@ -37,6 +37,21 @@ async function sendMessage(req, res, next) {
       [schoolId, req.user.id, student_id||null, lead_id||null, recipient_name, recipient_phone, channel||'WhatsApp', body]
     )
     const [rows] = await pool.execute('SELECT * FROM messages WHERE id = ?', [result.insertId])
+
+    // Push into the parent app's notifications feed — only possible when this
+    // message is tied to an enrolled student (leads don't have app accounts).
+    if (student_id) {
+      try {
+        const [[st]] = await pool.execute('SELECT parent_phone FROM students WHERE id=? AND school_id=?', [student_id, schoolId])
+        if (st?.parent_phone) {
+          const preview = body.length > 150 ? body.slice(0, 150) + '…' : body
+          await pool.execute(
+            `INSERT INTO notifications (parent_phone, student_id, type, title, body, is_read) VALUES (?,?,?,?,?,0)`,
+            [st.parent_phone, student_id, 'message', 'New message from school', preview])
+        }
+      } catch {}
+    }
+
     res.status(201).json(rows[0])
   } catch (err) { next(err) }
 }
@@ -62,14 +77,17 @@ async function sendAnnouncement(req, res, next) {
     const schoolId = req.user.school_id
     if (!title || !body) return res.status(400).json({ message: 'title and body are required' })
 
-    let recipientCount = 0
+    let targetStudents = []
     if (audience === 'All') {
-      const [[cnt]] = await pool.execute(`SELECT COUNT(*) AS c FROM students WHERE school_id=? AND status='Active'`, [schoolId])
-      recipientCount = cnt.c
+      const [rows] = await pool.execute(
+        `SELECT id, parent_phone FROM students WHERE school_id=? AND status='Active' AND parent_phone IS NOT NULL AND parent_phone<>''`, [schoolId])
+      targetStudents = rows
     } else if (audience === 'Grade-wise' && audience_filter) {
-      const [[cnt]] = await pool.execute(`SELECT COUNT(*) AS c FROM students WHERE school_id=? AND class=? AND status='Active'`, [schoolId, audience_filter])
-      recipientCount = cnt.c
+      const [rows] = await pool.execute(
+        `SELECT id, parent_phone FROM students WHERE school_id=? AND class=? AND status='Active' AND parent_phone IS NOT NULL AND parent_phone<>''`, [schoolId, audience_filter])
+      targetStudents = rows
     }
+    const recipientCount = targetStudents.length
 
     const [result] = await pool.execute(
       `INSERT INTO announcements (school_id, sent_by, title, body, audience, audience_filter, channel, recipient_count, status)
@@ -77,6 +95,17 @@ async function sendAnnouncement(req, res, next) {
       [schoolId, req.user.id, title, body, audience||'All', audience_filter||null, channel||'WhatsApp', recipientCount]
     )
     const [rows] = await pool.execute('SELECT * FROM announcements WHERE id = ?', [result.insertId])
+
+    // Fan the announcement out to every matching parent's notifications feed
+    if (targetStudents.length) {
+      try {
+        const values = targetStudents.map(s => [s.parent_phone, s.id, 'announcement', title, body, 0])
+        await pool.query(
+          `INSERT INTO notifications (parent_phone, student_id, type, title, body, is_read) VALUES ?`,
+          [values])
+      } catch {}
+    }
+
     res.status(201).json(rows[0])
   } catch (err) { next(err) }
 }
