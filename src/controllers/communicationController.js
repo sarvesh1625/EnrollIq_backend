@@ -1,4 +1,5 @@
 const { pool } = require('../db/pool')
+const { notifyParent } = require('../services/notificationService')
 
 async function getMessages(req, res, next) {
   try {
@@ -45,9 +46,10 @@ async function sendMessage(req, res, next) {
         const [[st]] = await pool.execute('SELECT parent_phone FROM students WHERE id=? AND school_id=?', [student_id, schoolId])
         if (st?.parent_phone) {
           const preview = body.length > 150 ? body.slice(0, 150) + '…' : body
-          await pool.execute(
-            `INSERT INTO notifications (parent_phone, student_id, type, title, body, is_read) VALUES (?,?,?,?,?,0)`,
-            [st.parent_phone, student_id, 'message', 'New message from school', preview])
+          await notifyParent({
+            schoolId, studentId: student_id, parentPhone: st.parent_phone,
+            type: 'message', title: 'New message from school', body: preview,
+          })
         }
       } catch {}
     }
@@ -97,12 +99,12 @@ async function sendAnnouncement(req, res, next) {
     const [rows] = await pool.execute('SELECT * FROM announcements WHERE id = ?', [result.insertId])
 
     // Fan the announcement out to every matching parent's notifications feed
-    if (targetStudents.length) {
+    for (const s of targetStudents) {
       try {
-        const values = targetStudents.map(s => [s.parent_phone, s.id, 'announcement', title, body, 0])
-        await pool.query(
-          `INSERT INTO notifications (parent_phone, student_id, type, title, body, is_read) VALUES ?`,
-          [values])
+        await notifyParent({
+          schoolId, studentId: s.id, parentPhone: s.parent_phone,
+          type: 'announcement', title, body,
+        })
       } catch {}
     }
 

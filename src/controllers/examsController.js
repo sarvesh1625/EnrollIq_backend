@@ -1,4 +1,5 @@
 const { pool } = require('../db/pool')
+const { notifyParent } = require('../services/notificationService')
 
 // GET /api/exams
 async function getExams(req, res, next) {
@@ -107,6 +108,9 @@ async function generateReportCards(req, res, next) {
     const examId   = req.params.id
     const schoolId = req.user.school_id
 
+    const [[examRow]] = await pool.execute('SELECT name FROM exams WHERE id=? AND school_id=?', [examId, schoolId])
+    const examName = examRow?.name || 'exam'
+
     // Get all students who appeared
     const [students] = await pool.execute(`
       SELECT DISTINCT student_id FROM exam_marks WHERE exam_id=? AND school_id=?
@@ -139,6 +143,20 @@ async function generateReportCards(req, res, next) {
           percentage=VALUES(percentage), grade=VALUES(grade), attendance_pct=VALUES(attendance_pct)
       `, [schoolId, student_id, examId, total, maxTotal, pct.toFixed(2), grade, attPct.toFixed(2)])
       generated++
+
+      // Notify the parent that this student's report card is ready
+      try {
+        const [[st]] = await pool.execute('SELECT parent_phone FROM students WHERE id=? AND school_id=?', [student_id, schoolId])
+        if (st?.parent_phone) {
+          await notifyParent({
+            schoolId, studentId: student_id, parentPhone: st.parent_phone,
+            type: 'test_graded',
+            title: `Report card ready: ${examName}`,
+            body: `${pct.toFixed(1)}% · Grade ${grade}`,
+            link: 'results',
+          })
+        }
+      } catch {}
     }
 
     // Update ranks within each class
