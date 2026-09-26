@@ -141,4 +141,65 @@ async function getSummary(req, res, next) {
   } catch (err) { next(err) }
 }
 
-module.exports = { getAttendance, markBulk, getStudentAttendance, getSummary }
+// GET /api/attendance/history?from=&to=&class=  — day-by-day history for any range
+// (used for weekly/monthly/yearly views and the History tab — same endpoint,
+// just called with different from/to dates)
+async function getHistory(req, res, next) {
+  try {
+    const schoolId = req.user.school_id
+    const { from, to, class: cls } = req.query
+    if (!from || !to) return res.status(400).json({ message: 'from and to dates are required' })
+
+    let classFilter = ''
+    let classParams = []
+    if (cls && cls !== 'All') { classFilter = ' AND s.class=?'; classParams = [cls] }
+
+    const [days] = await pool.execute(`
+      SELECT ca.date,
+             COUNT(DISTINCT ca.student_id) AS marked_count,
+             SUM(ca.status='Present') AS present,
+             SUM(ca.status='Absent')  AS absent,
+             SUM(ca.status='Late')    AS late,
+             SUM(ca.status='Holiday') AS holiday
+      FROM   class_attendance ca
+      JOIN   students s ON s.id = ca.student_id
+      WHERE  ca.school_id=? AND ca.date BETWEEN ? AND ? ${classFilter}
+      GROUP  BY ca.date
+      ORDER  BY ca.date DESC
+    `, [schoolId, from, to, ...classParams])
+
+    // "Total active students" is today's snapshot — used to judge whether a past
+    // day's marking looks complete. Not perfectly historical (enrollment changes
+    // over time aren't tracked day-by-day), but a reasonable, honest approximation.
+    const [[activeTotal]] = await pool.execute(
+      `SELECT COUNT(*) AS c FROM students s WHERE s.school_id=? AND s.status='Active' ${classFilter}`,
+      [schoolId, ...classParams])
+
+    const rows = days.map(d => ({
+      date: d.date,
+      marked_count: d.marked_count,
+      present: Number(d.present) || 0,
+      absent:  Number(d.absent)  || 0,
+      late:    Number(d.late)    || 0,
+      holiday: Number(d.holiday) || 0,
+      total_active: activeTotal.c,
+      is_complete: activeTotal.c > 0 && d.marked_count >= activeTotal.c,
+      percentage: d.marked_count > 0 ? Math.round((Number(d.present) / d.marked_count) * 100) : 0,
+    }))
+
+    const totalPresent = rows.reduce((s, d) => s + d.present, 0)
+    const totalMarked  = rows.reduce((s, d) => s + d.marked_count, 0)
+
+    res.json({
+      days: rows,
+      range: { from, to },
+      summary: {
+        total_days: rows.length,
+        avg_attendance_pct: totalMarked > 0 ? Math.round((totalPresent / totalMarked) * 100) : 0,
+        total_active: activeTotal.c,
+      }
+    })
+  } catch (err) { next(err) }
+}
+
+module.exports = { getAttendance, markBulk, getStudentAttendance, getSummary, getHistory }
