@@ -25,9 +25,19 @@ async function protect(req, res, next) {
   }
 }
 
+// A chairman is "above" a branch admin (per product spec), so once they've switched
+// into a branch (req.user.school_id becomes that branch — see protect() above and
+// PUT /api/branches/switch, which is chairman-only), they get full admin-equivalent
+// access to that one branch's screens, scoped by the same school_id as always.
 function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') return res.status(403).json({ message: 'Admin access required' })
+  if (!['admin', 'chairman'].includes(req.user?.role)) return res.status(403).json({ message: 'Admin access required' })
   next()
 }
 
-module.exports = { protect, requireAdmin }
+// Chairman sits above a single branch's admin — sees every branch in their group.
+function requireChairman(req, res, next) {
+  if (req.user?.role !== 'chairman') return res.status(403).json({ message: 'Chairman access required' })
+  next()
+}
+
+module.exports = { protect, requireAdmin, requireChairman }

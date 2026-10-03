@@ -263,4 +263,10 @@ async function ask(req, res, next) {
   }
 }
 
-module.exports = { ask }
+module.exports = {
+  ask,
+  // Exported so groupAssistantController.js can reuse the exact same school-scoped
+  // gatherers per branch, rather than duplicating any query logic.
+  getActiveYear, gLeadsAdmissions, gStudents, gFees, gStaff, gTransport, gExams,
+  gAttendance, gCommunication, gStudentByName, detectTopics, extractStudentName, callGroq,
+}

@@ -233,4 +233,72 @@ router.post('/reset-password/:user_id', superAuth, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// ── Chairman accounts — ONLY creatable/editable here, never from a branch admin's
+// own Staff page (see rolesController.js's SUPERADMIN_ONLY_ROLES guard) ─────────
+
+// GET /api/superadmin/schools/:id/chairmen — chairman accounts for that school's group
+router.get('/schools/:id/chairmen', superAuth, async (req, res, next) => {
+  try {
+    const [[school]] = await pool.execute('SELECT group_id FROM schools WHERE id=?', [req.params.id])
+    if (!school) return res.status(404).json({ message: 'School not found' })
+    const groupId = school.group_id
+
+    const [rows] = groupId
+      ? await pool.execute(
+          `SELECT u.id, u.name, u.email, u.is_active, u.last_login, u.school_id, s.name AS home_branch
+           FROM users u JOIN schools s ON s.id = u.school_id
+           WHERE u.role='chairman' AND s.group_id=? ORDER BY u.name`, [groupId])
+      : await pool.execute(
+          `SELECT u.id, u.name, u.email, u.is_active, u.last_login, u.school_id, s.name AS home_branch
+           FROM users u JOIN schools s ON s.id = u.school_id
+           WHERE u.role='chairman' AND u.school_id=? ORDER BY u.name`, [req.params.id])
+    res.json(rows)
+  } catch (err) { next(err) }
+})
+
+// POST /api/superadmin/schools/:id/chairmen — create a chairman for that school's group
+// (their school_id = the branch passed in; the Group Dashboard resolves every sibling
+// branch from that branch's group_id, so any branch in the group works equally)
+router.post('/schools/:id/chairmen', superAuth, async (req, res, next) => {
+  try {
+    const { name, email, password } = req.body
+    if (!name?.trim() || !email?.trim() || !password)
+      return res.status(400).json({ message: 'Name, email and password are required' })
+    if (password.length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters' })
+
+    const [[school]] = await pool.execute('SELECT id FROM schools WHERE id=?', [req.params.id])
+    if (!school) return res.status(404).json({ message: 'School not found' })
+
+    const [dupe] = await pool.execute('SELECT id FROM users WHERE email=?', [email.toLowerCase().trim()])
+    if (dupe.length) return res.status(400).json({ message: 'A user with this email already exists' })
+
+    const hash = await bcrypt.hash(password, 10)
+    const [result] = await pool.execute(
+      `INSERT INTO users (school_id, name, email, password_hash, role, is_active)
+       VALUES (?,?,?,?,'chairman',1)`,
+      [req.params.id, name.trim(), email.toLowerCase().trim(), hash])
+    res.status(201).json({ id: result.insertId, message: `${name.trim()} added as Chairman` })
+  } catch (err) { next(err) }
+})
+
+// PATCH /api/superadmin/chairmen/:id — activate/deactivate a chairman account
+router.patch('/chairmen/:id', superAuth, async (req, res, next) => {
+  try {
+    const { is_active } = req.body
+    const [result] = await pool.execute(
+      `UPDATE users SET is_active=? WHERE id=? AND role='chairman'`, [is_active ? 1 : 0, req.params.id])
+    if (!result.affectedRows) return res.status(404).json({ message: 'Chairman account not found' })
+    res.json({ message: is_active ? 'Chairman account enabled' : 'Chairman account disabled' })
+  } catch (err) { next(err) }
+})
+
+// DELETE /api/superadmin/chairmen/:id
+router.delete('/chairmen/:id', superAuth, async (req, res, next) => {
+  try {
+    const [result] = await pool.execute(`DELETE FROM users WHERE id=? AND role='chairman'`, [req.params.id])
+    if (!result.affectedRows) return res.status(404).json({ message: 'Chairman account not found' })
+    res.json({ message: 'Chairman account removed' })
+  } catch (err) { next(err) }
+})
+
 module.exports = { router, superAuth }

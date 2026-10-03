@@ -73,10 +73,13 @@ const { router: superAdminRouter } = require('./routes/superadmin')
 app.use('/api/features', require('./routes/features'))
 app.use('/api/ai-exams', require('./routes/aiExams'))
 app.use('/api/diary', require('./routes/diary'))
+app.use('/api/posts',        require('./routes/posts'))
+app.use('/api/parent/posts', require('./routes/parentPosts'))
 
 app.use('/api/parent',     parentRouter)
 app.use('/api/driver',     driverRouter)
 app.use('/api/superadmin', superAdminRouter)
+app.use('/api/group', require('./routes/group'))
 
 // ── Error Handlers ────────────────────────────────────────────────────────────
 app.use(require('./middleware/errorHandler').notFound)

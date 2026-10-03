@@ -50,7 +50,7 @@ exports.listUsers = async (req, res, next) => {
              GROUP_CONCAT(DISTINCT CONCAT(ta.class,'-',ta.section,' ',ta.subject) SEPARATOR ', ') AS assignments_summary
       FROM users u
       LEFT JOIN teacher_assignments ta ON ta.user_id = u.id
-      WHERE u.school_id = ?
+      WHERE u.school_id = ? AND u.role NOT IN ('chairman')
       GROUP BY u.id
       ORDER BY u.created_at DESC
     `, [req.user.school_id])
@@ -68,7 +68,7 @@ exports.getUser = async (req, res, next) => {
               emergency_contact_name, emergency_contact_phone, blood_group,
               aadhaar_number, pan_number, police_verification, bank_account, bank_ifsc,
               pf_uan, esi_number, is_active, must_change_password, class_teacher_of, created_at
-       FROM users WHERE id = ? AND school_id = ?`,
+       FROM users WHERE id = ? AND school_id = ? AND role NOT IN ('chairman')`,
       [req.params.id, req.user.school_id]
     )
     if (!rows.length) return res.status(404).json({ message: 'Staff member not found' })
@@ -84,11 +84,18 @@ exports.getUser = async (req, res, next) => {
 }
 
 // ── POST /api/roles/users — create staff member ─────────────────
+// Roles a branch admin can never grant through this endpoint, no matter what the
+// frontend offers — Chairman sees every branch in the group, so only a superadmin
+// (a separate login system, see superAdminController) may create or promote one.
+const SUPERADMIN_ONLY_ROLES = ['chairman']
+
 exports.createUser = async (req, res, next) => {
   try {
     const b = req.body
     if (!b.name || !b.email || !b.password || !b.role)
       return res.status(400).json({ message: 'Name, email, role and password are required' })
+    if (SUPERADMIN_ONLY_ROLES.includes(b.role))
+      return res.status(403).json({ message: 'This role can only be granted by EnrollIQ support.' })
     if (b.password.length < 6)
       return res.status(400).json({ message: 'Password must be at least 6 characters' })
 
@@ -115,6 +122,13 @@ exports.createUser = async (req, res, next) => {
 exports.updateUser = async (req, res, next) => {
   try {
     const b = req.body
+    if ('role' in b && SUPERADMIN_ONLY_ROLES.includes(b.role))
+      return res.status(403).json({ message: 'This role can only be granted by EnrollIQ support.' })
+    // A branch admin also can't edit an EXISTING chairman's row (their own school's admin
+    // panel shouldn't be able to touch a cross-branch account at all, even to rename it).
+    const [[target]] = await pool.execute('SELECT role FROM users WHERE id=? AND school_id=?', [req.params.id, req.user.school_id])
+    if (target && SUPERADMIN_ONLY_ROLES.includes(target.role))
+      return res.status(403).json({ message: 'Chairman accounts can only be changed by EnrollIQ support.' })
     const sets = [], vals = []
     for (const f of FIELDS) if (f in b) { sets.push(`${f} = ?`), vals.push(nn(b[f])) }
     if ('is_active' in b)            { sets.push('is_active = ?');            vals.push(b.is_active ? 1 : 0) }
@@ -137,7 +151,8 @@ exports.deleteUser = async (req, res, next) => {
   try {
     if (Number(req.params.id) === req.user.id)
       return res.status(400).json({ message: "You can't delete your own account" })
-    await pool.execute('DELETE FROM users WHERE id = ? AND school_id = ?', [req.params.id, req.user.school_id])
+    const [result] = await pool.execute("DELETE FROM users WHERE id = ? AND school_id = ? AND role NOT IN ('chairman')", [req.params.id, req.user.school_id])
+    if (!result.affectedRows) return res.status(404).json({ message: 'Staff member not found' })
     res.json({ message: 'Staff member deleted' })
   } catch (err) { next(err) }
 }
@@ -149,9 +164,10 @@ exports.resetPassword = async (req, res, next) => {
     if (!new_password || new_password.length < 6)
       return res.status(400).json({ message: 'Password must be at least 6 characters' })
     const hash = await bcrypt.hash(new_password, 10)
-    await pool.execute(
-      'UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ? AND school_id = ?',
+    const [result] = await pool.execute(
+      "UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ? AND school_id = ? AND role NOT IN ('chairman')",
       [hash, req.params.id, req.user.school_id])
+    if (!result.affectedRows) return res.status(404).json({ message: 'Staff member not found' })
     res.json({ message: 'Password reset — user must change it on next login' })
   } catch (err) { next(err) }
 }
