@@ -28,7 +28,7 @@ app.use(cors({
   },
   credentials: true,
 }))
-app.use(express.json())
+app.use(express.json({ limit: '10mb' }))   // was express.json() — the default 100kb limit made big Bulk Imports fail with "request entity too large"
 app.use(express.urlencoded({ extended: true }))
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')))
 app.use((req, _res, next) => {
@@ -59,6 +59,7 @@ app.use('/api/ai',            require('./routes/ai'))
 app.use('/api/import',        require('./routes/import'))
 app.use('/api/discovery',     require('./routes/discovery'))
 app.use('/api/ads',           require('./routes/ads'))
+app.use('/api/google-ads',    require('./routes/googleAds'))   // ← NEW: "Connect with Google" (OAuth + status + account link)
 app.use('/api/kit', require('./routes/kit'))
 app.use('/api/tracking', require('./routes/tracking'))
 app.use('/api/support', require('./routes/support'))
@@ -90,4 +91,5 @@ app.listen(PORT, () => {
   console.log(`\n🚀  Backend running  → http://localhost:${PORT}`)
   console.log(`🗄️   Database        → cmr_of_school (MySQL)`)
   console.log(`🌐  Frontend origin  → ${process.env.CLIENT_URL || 'http://localhost:5173'}\n`)
+  require('./services/googleAdsSync').start()   // ← NEW: pulls Google Ads stats + budget every 6h for connected schools
 })
