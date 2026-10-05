@@ -11,10 +11,9 @@
  */
 const axios = require('axios')
 const { pool } = require('../db/pool')
-const { getAccessToken } = require('../controllers/googleAdsController')
+const { getAccessToken, API_VERSION, describeGoogleError } = require('../controllers/googleAdsController')
 
 const POLL_MS = Number(process.env.GOOGLE_ADS_SYNC_MS || 6 * 60 * 60 * 1000)
-const API_VERSION = 'v18'
 
 const CAMPAIGN_GAQL = `
   SELECT campaign.name, metrics.impressions, metrics.clicks, metrics.cost_micros,
@@ -104,7 +103,7 @@ async function tick() {
       const n = await syncSchool(conn)
       if (n) console.log(`📊  [school ${conn.school_id}] synced ${n} Google Ads stat row(s)`)
     } catch (e) {
-      const msg = e.response?.data?.error?.message || e.message
+      const msg = describeGoogleError(e)
       console.log(`⚠️  [school ${conn.school_id}] Google Ads sync error:`, msg)
       pool.execute(`UPDATE google_ads_connections SET last_error = ? WHERE id = ?`,
         [String(msg).slice(0, 250), conn.id]).catch(() => {})

@@ -5,6 +5,49 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const AUTH_URL  = 'https://accounts.google.com/o/oauth2/v2/auth'
 const SCOPE     = 'https://www.googleapis.com/auth/adwords'
 
+// Google retires each Ads API version about a year after release (v18 died 20 Aug 2025,
+// v20 on 10 Jun 2026). Check https://developers.google.com/google-ads/api/docs/sunset-dates
+// and change GOOGLE_ADS_API_VERSION in the server environment — no code change needed.
+const API_VERSION = (process.env.GOOGLE_ADS_API_VERSION || 'v24').trim()
+const ADS_BASE    = `https://googleads.googleapis.com/${API_VERSION}`
+
+// Turn a failed Google call into one readable sentence (shown on the Ads card / logged).
+function describeGoogleError(e) {
+  const status = e.response?.status
+  const data = e.response?.data
+  const msg = data?.error?.message || data?.error_description
+    || (typeof data === 'string' && !data.trim().startsWith('<') ? data.slice(0, 160) : '') || e.message
+  if (status === 404)
+    return `Google returned 404 — the Google Ads API version (${API_VERSION}) may have been retired. Set GOOGLE_ADS_API_VERSION to a current version. (${msg})`
+  return `${status ? 'HTTP ' + status + ': ' : ''}${msg}`
+}
+
+// Right after an account is linked, pull its stats once straight away instead of making the
+// school wait for the 6-hourly job — and record any failure on the card so it is visible at once.
+function kickSync(schoolId) {
+  setImmediate(async () => {
+    try {
+      const [[conn]] = await pool.execute(
+        'SELECT * FROM google_ads_connections WHERE school_id=? AND customer_id IS NOT NULL', [schoolId])
+      if (!conn) return
+      const n = await require('../services/googleAdsSync').syncSchool(conn)
+      console.log(`📊  [school ${schoolId}] first Google Ads sync: ${n} stat row(s)`)
+    } catch (e) {
+      const msg = describeGoogleError(e)
+      console.error(`⚠️  [school ${schoolId}] first Google Ads sync failed:`, msg)
+      pool.execute('UPDATE google_ads_connections SET last_error=? WHERE school_id=?',
+        [String(msg).slice(0, 250), schoolId]).catch(() => {})
+    }
+  })
+}
+
+async function fetchAccessibleCustomers(access_token) {
+  const r = await axios.get(`${ADS_BASE}/customers:listAccessibleCustomers`, {
+    headers: { Authorization: `Bearer ${access_token}`, 'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '' },
+  })
+  return (r.data.resourceNames || []).map(rn => rn.split('/')[1])
+}
+
 function envReady() {
   return !!(process.env.GOOGLE_ADS_CLIENT_ID && process.env.GOOGLE_ADS_CLIENT_SECRET && process.env.GOOGLE_ADS_REDIRECT_URI)
 }
@@ -56,14 +99,16 @@ exports.callback = async (req, res, next) => {
 
     let accessibleCustomers = []
     try {
-      const listRes = await axios.get('https://googleads.googleapis.com/v18/customers:listAccessibleCustomers', {
-        headers: { Authorization: `Bearer ${access_token}`, 'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '' },
-      })
-      accessibleCustomers = (listRes.data.resourceNames || []).map(rn => rn.split('/')[1])
-    } catch {}
+      accessibleCustomers = await fetchAccessibleCustomers(access_token)
+    } catch (e) {
+      // The sign-in itself succeeded and is saved; only the account list failed. Keep going so the
+      // school can type its Customer ID — but never hide WHY (this used to fail silently).
+      console.error('Google Ads: listing accessible accounts failed:', describeGoogleError(e))
+    }
 
     if (accessibleCustomers.length === 1) {
       await pool.execute(`UPDATE google_ads_connections SET customer_id = ? WHERE school_id = ?`, [accessibleCustomers[0], schoolId])
+      kickSync(schoolId)
     }
 
     res.redirect(`${frontend}/ads?google_ads=connected${accessibleCustomers.length !== 1 ? '&pick_account=1' : ''}`)
@@ -83,8 +128,22 @@ exports.status = async (req, res, next) => {
 
     const conn = rows[0]
     let accessibleCustomers = []
+    let accountsError = null
     if (!conn.customer_id) {
-      try { accessibleCustomers = await listAccessibleCustomers(req.user.school_id) } catch {}
+      // Still needs an account picked — try listing again with a fresh access token
+      try {
+        accessibleCustomers = await listAccessibleCustomers(req.user.school_id)
+        if (accessibleCustomers.length === 1) {          // same rule as the sign-in callback
+          await pool.execute(`UPDATE google_ads_connections SET customer_id = ? WHERE school_id = ?`,
+            [accessibleCustomers[0], req.user.school_id])
+          conn.customer_id = accessibleCustomers[0]
+          accessibleCustomers = []
+          kickSync(req.user.school_id)
+        }
+      } catch (e) {
+        accountsError = describeGoogleError(e)
+        console.error('Google Ads: listing accessible accounts failed:', accountsError)
+      }
     }
 
     const [last30] = await pool.execute(
@@ -92,7 +151,7 @@ exports.status = async (req, res, next) => {
        FROM ad_platform_stats WHERE school_id=? AND platform='google_ads' AND stat_date > DATE_SUB(CURDATE(), INTERVAL 30 DAY)`,
       [req.user.school_id])
 
-    res.json({ connected: true, ...conn, accessible_customers: accessibleCustomers, stats_30d: last30[0] })
+    res.json({ connected: true, ...conn, accessible_customers: accessibleCustomers, accounts_error: accountsError, stats_30d: last30[0] })
   } catch (e) { next(e) }
 }
 
@@ -104,6 +163,7 @@ exports.setCustomerId = async (req, res, next) => {
     const [result] = await pool.execute(
       `UPDATE google_ads_connections SET customer_id = ? WHERE school_id = ?`, [clean, req.user.school_id])
     if (!result.affectedRows) return res.status(404).json({ message: 'Connect Google Ads first' })
+    kickSync(req.user.school_id)
     res.json({ message: 'Google Ads account linked' })
   } catch (e) { next(e) }
 }
@@ -129,10 +189,10 @@ async function listAccessibleCustomers(schoolId) {
   const [[conn]] = await pool.execute(`SELECT refresh_token FROM google_ads_connections WHERE school_id=?`, [schoolId])
   if (!conn) return []
   const access_token = await getAccessToken(conn.refresh_token)
-  const r = await axios.get('https://googleads.googleapis.com/v18/customers:listAccessibleCustomers', {
-    headers: { Authorization: `Bearer ${access_token}`, 'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '' },
-  })
-  return (r.data.resourceNames || []).map(rn => rn.split('/')[1])
+  return fetchAccessibleCustomers(access_token)
 }
 
 exports.getAccessToken = getAccessToken
+exports.API_VERSION = API_VERSION
+exports.ADS_BASE = ADS_BASE
+exports.describeGoogleError = describeGoogleError
