@@ -105,7 +105,7 @@ async function tick() {
     } catch (e) {
       const msg = describeGoogleError(e)
       console.log(`⚠️  [school ${conn.school_id}] Google Ads sync error:`, msg)
-      pool.execute(`UPDATE google_ads_connections SET last_error = ? WHERE id = ?`,
+      await pool.execute(`UPDATE google_ads_connections SET last_error = ? WHERE id = ?`,
         [String(msg).slice(0, 250), conn.id]).catch(() => {})
     }
   }
@@ -115,6 +115,12 @@ let timer = null
 function start() {
   if ((process.env.GOOGLE_ADS_SYNC || 'on').toLowerCase() === 'off') {
     console.log('ℹ️  Google Ads sync is OFF')
+    return
+  }
+  // A server without the Google settings (e.g. a developer's laptop pointed at the live database) must
+  // not run the job: it would fail every time and write that failure onto the school's real Ads card.
+  if (!process.env.GOOGLE_ADS_CLIENT_ID || !process.env.GOOGLE_ADS_CLIENT_SECRET) {
+    console.log('ℹ️  Google Ads sync NOT started — GOOGLE_ADS_CLIENT_ID / GOOGLE_ADS_CLIENT_SECRET are not set on this server')
     return
   }
   console.log(`📊  Google Ads sync started (every ${Math.round(POLL_MS / 60000)}min)`)

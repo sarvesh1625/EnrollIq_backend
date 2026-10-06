@@ -11,15 +11,60 @@ const SCOPE     = 'https://www.googleapis.com/auth/adwords'
 const API_VERSION = (process.env.GOOGLE_ADS_API_VERSION || 'v24').trim()
 const ADS_BASE    = `https://googleads.googleapis.com/${API_VERSION}`
 
-// Turn a failed Google call into one readable sentence (shown on the Ads card / logged).
-function describeGoogleError(e) {
-  const status = e.response?.status
+// Plain-English next step for the Google errors we actually run into.
+const GOOGLE_HINTS = {
+  SERVICE_DISABLED:              'The Google Ads API is switched off in the Google Cloud project that owns your OAuth client — open the link in the message and click Enable.',
+  DEVELOPER_TOKEN_NOT_APPROVED:  'Your developer token is only approved for test accounts — apply for Basic access in Google Ads > Tools > API Center.',
+  DEVELOPER_TOKEN_PROHIBITED:    'Google does not allow this developer token to be used from here — check it in Google Ads > Tools > API Center.',
+  USER_PERMISSION_DENIED:        'The Google user you signed in with cannot open this account directly (it may sit under a manager account).',
+  CUSTOMER_NOT_ENABLED:          'That Google Ads account is not active (cancelled or never finished set-up).',
+  CUSTOMER_NOT_FOUND:            'That Customer ID was not found — re-check the number.',
+  ACCESS_TOKEN_SCOPE_INSUFFICIENT: 'The sign-in did not grant Google Ads access — click Connect with Google again and allow it.',
+  invalid_client:                'This server\'s GOOGLE_ADS_CLIENT_ID / GOOGLE_ADS_CLIENT_SECRET are missing or wrong (or belong to a different Google Cloud project than the sign-in). Fix them in the server settings.',
+  unauthorized_client:           'The saved Google sign-in was issued to a different OAuth client than this server uses — click Connect with Google again.',
+  invalid_grant:                 'The Google sign-in expired or was revoked — click Connect with Google again (testing-mode sign-ins last about 7 days).',
+}
+
+// Pull the useful parts out of a Google error. Google answers in several shapes:
+//   { error: { message, status, details: [...] } }          (most calls)
+//   [ { error: { message, status, details: [...] } } ]      (searchStream wraps errors in a list)
+//   { error: 'invalid_grant', error_description: '...' }    (the sign-in token endpoint)
+//   an HTML page                                            (never shown to users)
+function parseGoogleError(e) {
   const data = e.response?.data
-  const msg = data?.error?.message || data?.error_description
-    || (typeof data === 'string' && !data.trim().startsWith('<') ? data.slice(0, 160) : '') || e.message
-  if (status === 404)
-    return `Google returned 404 — the Google Ads API version (${API_VERSION}) may have been retired. Set GOOGLE_ADS_API_VERSION to a current version. (${msg})`
-  return `${status ? 'HTTP ' + status + ': ' : ''}${msg}`
+  const body = Array.isArray(data) ? data[0] : data
+  const err = body && typeof body === 'object' ? body.error : null
+  let code = null, message = null, project = null
+  if (typeof err === 'string') {                        // OAuth style
+    code = err; message = body.error_description || null
+  } else if (err && typeof err === 'object') {
+    for (const d of (err.details || [])) {
+      if (!code && d.reason) code = d.reason                                 // e.g. SERVICE_DISABLED
+      if (!project && d.metadata && d.metadata.consumer) project = String(d.metadata.consumer).replace('projects/', '')
+      for (const f of (d.errors || [])) {                                    // Google Ads failure list
+        if (!code && f.errorCode && typeof f.errorCode === 'object') code = Object.values(f.errorCode)[0]
+        if (!message && f.message) message = f.message
+      }
+    }
+    code = code || err.status || null
+    message = message || err.message || null
+  } else if (typeof data === 'string' && data.trim() && !data.trim().startsWith('<')) {
+    message = data.slice(0, 160)
+  }
+  return { status: e.response?.status, code, project, message: message || e.message }
+}
+
+// Turn a failed Google call into one readable sentence (shown on the Ads card / logged).
+// Fits the 250-character last_error column: code + hint first, Google's own words after.
+function describeGoogleError(e) {
+  const { status, code, project, message } = parseGoogleError(e)
+  let hint = GOOGLE_HINTS[code]
+  if (code === 'SERVICE_DISABLED' && project)       // say WHICH project, so it can't be missed or cut off
+    hint = `The Google Ads API is switched off in Google Cloud project ${project} (the one that owns your OAuth client). Enable it there: APIs & Services > Library > Google Ads API.`
+  if (status === 404 && !code)
+    return `Google returned 404 — the Google Ads API version (${API_VERSION}) may have been retired. Set GOOGLE_ADS_API_VERSION to a current version. (${message})`
+  const head = `${status ? 'HTTP ' + status : 'Error'}${code ? ' ' + code : ''}`
+  return hint ? `${head}: ${hint} — Google said: ${message}` : `${head}: ${message}`
 }
 
 // Right after an account is linked, pull its stats once straight away instead of making the
@@ -176,6 +221,10 @@ exports.disconnect = async (req, res, next) => {
 }
 
 async function getAccessToken(refresh_token) {
+  // Without these, URLSearchParams would send the literal text "undefined" to Google and the
+  // error would be a confusing "OAuth client was not found". Say what is actually wrong instead.
+  if (!process.env.GOOGLE_ADS_CLIENT_ID || !process.env.GOOGLE_ADS_CLIENT_SECRET)
+    throw new Error('This server has no GOOGLE_ADS_CLIENT_ID / GOOGLE_ADS_CLIENT_SECRET set, so it cannot talk to Google. (On your own computer, set GOOGLE_ADS_SYNC=off in .env.)')
   const r = await axios.post(TOKEN_URL, new URLSearchParams({
     refresh_token,
     client_id: process.env.GOOGLE_ADS_CLIENT_ID,
