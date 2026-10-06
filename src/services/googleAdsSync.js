@@ -117,12 +117,6 @@ function start() {
     console.log('ℹ️  Google Ads sync is OFF')
     return
   }
-  // A server without the Google settings (e.g. a developer's laptop pointed at the live database) must
-  // not run the job: it would fail every time and write that failure onto the school's real Ads card.
-  if (!process.env.GOOGLE_ADS_CLIENT_ID || !process.env.GOOGLE_ADS_CLIENT_SECRET) {
-    console.log('ℹ️  Google Ads sync NOT started — GOOGLE_ADS_CLIENT_ID / GOOGLE_ADS_CLIENT_SECRET are not set on this server')
-    return
-  }
   console.log(`📊  Google Ads sync started (every ${Math.round(POLL_MS / 60000)}min)`)
   tick()
   timer = setInterval(tick, POLL_MS)

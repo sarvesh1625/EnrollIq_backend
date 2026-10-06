@@ -20,8 +20,6 @@ const GOOGLE_HINTS = {
   CUSTOMER_NOT_ENABLED:          'That Google Ads account is not active (cancelled or never finished set-up).',
   CUSTOMER_NOT_FOUND:            'That Customer ID was not found — re-check the number.',
   ACCESS_TOKEN_SCOPE_INSUFFICIENT: 'The sign-in did not grant Google Ads access — click Connect with Google again and allow it.',
-  invalid_client:                'This server\'s GOOGLE_ADS_CLIENT_ID / GOOGLE_ADS_CLIENT_SECRET are missing or wrong (or belong to a different Google Cloud project than the sign-in). Fix them in the server settings.',
-  unauthorized_client:           'The saved Google sign-in was issued to a different OAuth client than this server uses — click Connect with Google again.',
   invalid_grant:                 'The Google sign-in expired or was revoked — click Connect with Google again (testing-mode sign-ins last about 7 days).',
 }
 
@@ -221,10 +219,6 @@ exports.disconnect = async (req, res, next) => {
 }
 
 async function getAccessToken(refresh_token) {
-  // Without these, URLSearchParams would send the literal text "undefined" to Google and the
-  // error would be a confusing "OAuth client was not found". Say what is actually wrong instead.
-  if (!process.env.GOOGLE_ADS_CLIENT_ID || !process.env.GOOGLE_ADS_CLIENT_SECRET)
-    throw new Error('This server has no GOOGLE_ADS_CLIENT_ID / GOOGLE_ADS_CLIENT_SECRET set, so it cannot talk to Google. (On your own computer, set GOOGLE_ADS_SYNC=off in .env.)')
   const r = await axios.post(TOKEN_URL, new URLSearchParams({
     refresh_token,
     client_id: process.env.GOOGLE_ADS_CLIENT_ID,
