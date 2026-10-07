@@ -72,9 +72,15 @@ async function syncSchool(conn) {
     const budgetRows = await gaqlSearch(conn.customer_id, access_token, BUDGET_GAQL)
     if (budgetRows.length) {
       // Sum across all approved budget documents (an account can have more than one)
-      budgetLimit = budgetRows.reduce((s, r) => s + Number(r.accountBudget?.approvedSpendingLimitMicros || 0), 0) / 1_000_000
-      budgetSpent = budgetRows.reduce((s, r) => s + Number(r.accountBudget?.amountServedMicros || 0), 0) / 1_000_000
-      isPostpaid = 0
+      const limit = budgetRows.reduce((s, r) => s + Number(r.accountBudget?.approvedSpendingLimitMicros || 0), 0) / 1_000_000
+      // Only trust this as a prepaid budget when Google reports a real, positive limit.
+      // Manual-payment / prepaid accounts usually have NO limit here, and amount_served is a
+      // lifetime figure for the budget document — showing it as "Spent" is misleading.
+      if (limit > 0) {
+        budgetLimit = limit
+        budgetSpent = budgetRows.reduce((s, r) => s + Number(r.accountBudget?.amountServedMicros || 0), 0) / 1_000_000
+        isPostpaid = 0
+      }
     }
   } catch {
     // account_budget query can fail outright for standard postpaid (credit card) accounts —
@@ -115,6 +121,12 @@ let timer = null
 function start() {
   if ((process.env.GOOGLE_ADS_SYNC || 'on').toLowerCase() === 'off') {
     console.log('ℹ️  Google Ads sync is OFF')
+    return
+  }
+  // A server without the Google settings (e.g. a developer's laptop pointed at the live database) must
+  // not run the job: it would fail every time and write that failure onto the school's real Ads card.
+  if (!process.env.GOOGLE_ADS_CLIENT_ID || !process.env.GOOGLE_ADS_CLIENT_SECRET) {
+    console.log('ℹ️  Google Ads sync NOT started — GOOGLE_ADS_CLIENT_ID / GOOGLE_ADS_CLIENT_SECRET are not set on this server')
     return
   }
   console.log(`📊  Google Ads sync started (every ${Math.round(POLL_MS / 60000)}min)`)
