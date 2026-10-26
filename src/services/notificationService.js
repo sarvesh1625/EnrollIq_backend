@@ -7,13 +7,14 @@ const { pool } = require('../db/pool')
 
 // Notify ONE parent (by phone) about their child
 async function notifyParent({ schoolId, studentId, parentPhone, type, title, body, link }) {
-  if (!parentPhone) return
+  if (!parentPhone) return false
   try {
     await pool.execute(
       `INSERT INTO notifications (school_id, student_id, parent_phone, type, title, body, link)
        VALUES (?,?,?,?,?,?,?)`,
       [schoolId, studentId || null, parentPhone, type, title, body || null, link || null])
-  } catch (e) { console.error('notify failed:', e.message) }
+    return true
+  } catch (e) { console.error('notify failed:', e.message); return false }
 }
 
 // Notify all parents of a class (for class-wide diary/homework)

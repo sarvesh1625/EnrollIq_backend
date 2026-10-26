@@ -1,4 +1,5 @@
 const { pool } = require('../db/pool')
+const { runFeeReminders } = require('../services/feeReminders')
 
 async function getFeeStats(req, res, next) {
   try {
@@ -125,4 +126,25 @@ async function createFeeStructure(req, res, next) {
   } catch (err) { next(err) }
 }
 
-module.exports = { getFeeStats, getPayments, createPayment, recordPayment, getFeeStructures, createFeeStructure }
+// POST /api/fees/reminders/run   body: { dry_run?: bool }   (admin or accountant)
+async function runReminders(req, res, next) {
+  try {
+    if (!['admin', 'accountant'].includes(req.user.role)) return res.status(403).json({ message: 'Admin or accountant only' })
+    const out = await runFeeReminders({ schoolId: req.user.school_id, dryRun: !!req.body.dry_run })
+    res.json(out)
+  } catch (err) { next(err) }
+}
+
+// GET /api/fees/reminders/recent   last 30 reminders sent for this school
+async function recentReminders(req, res, next) {
+  try {
+    if (!['admin', 'accountant'].includes(req.user.role)) return res.status(403).json({ message: 'Admin or accountant only' })
+    const [rows] = await pool.execute(
+      `SELECT n.id, n.title, n.body, n.is_read, n.created_at, s.name AS student_name
+       FROM notifications n LEFT JOIN students s ON s.id = n.student_id
+       WHERE n.school_id = ? AND n.type = 'fee' ORDER BY n.id DESC LIMIT 30`, [req.user.school_id])
+    res.json(rows)
+  } catch (err) { next(err) }
+}
+
+module.exports = { runReminders, recentReminders, getFeeStats, getPayments, createPayment, recordPayment, getFeeStructures, createFeeStructure }

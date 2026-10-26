@@ -1,4 +1,5 @@
 const { pool }     = require('../db/pool')
+const { autoAssignLead } = require('../services/leadAssignment')
 const { bulkScore } = require('../controllers/aiController')
 
 // POST /api/import/leads — bulk import leads from parsed CSV/Excel data
@@ -46,7 +47,7 @@ async function importLeads(req, res, next) {
           [schoolId, row.phone]
         )
 
-        await pool.execute(`
+        const [ins] = await pool.execute(`
           INSERT INTO leads
             (school_id, parent_name, phone, email, child_grade, area, lead_source, keyword, notes, ai_score, ai_label, is_duplicate, academic_year_id)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -58,6 +59,7 @@ async function importLeads(req, res, next) {
           row.ai_score, row.ai_label, dup.length > 0 ? 1 : 0,
           academicYearId
         ])
+        await autoAssignLead(ins.insertId, schoolId)
         success++
       } catch (e) {
         failed++

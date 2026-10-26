@@ -14,7 +14,7 @@ async function login(req, res, next) {
 
     const [rows] = await pool.execute(`
       SELECT u.id, u.school_id, u.name, u.email, u.password_hash, u.role,
-             u.must_change_password,
+             u.must_change_password, u.is_counsellor,
              s.name AS school_name
       FROM   users u
       LEFT JOIN schools s ON s.id = u.school_id
@@ -37,7 +37,7 @@ async function login(req, res, next) {
       token: signToken(user.id),
       user: {
         id: user.id, school_id: user.school_id, name: user.name, email: user.email,
-        role: user.role, school_name: user.school_name,
+        role: user.role, school_name: user.school_name, is_counsellor: !!user.is_counsellor,
         must_change_password: !!user.must_change_password,   // value AT this login (for a future force-change screen)
       }
     })
@@ -48,7 +48,7 @@ async function login(req, res, next) {
 async function getMe(req, res, next) {
   try {
     const [rows] = await pool.execute(`
-      SELECT u.id, u.school_id, u.name, u.email, u.role, u.last_login,
+      SELECT u.id, u.school_id, u.name, u.email, u.role, u.last_login, u.is_counsellor,
              s.name AS school_name, s.city, s.board
       FROM   users u
       LEFT JOIN schools s ON s.id = u.school_id

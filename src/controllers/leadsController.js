@@ -1,4 +1,5 @@
 const { pool } = require('../db/pool')
+const { autoAssignLead } = require('../services/leadAssignment')
 
 function calculateAIScore(lead) {
   let score = 40
@@ -17,7 +18,7 @@ function calculateAIScore(lead) {
 // GET /api/leads
 async function getLeads(req, res, next) {
   try {
-    const { status, ai_label, search, limit = 50, offset = 0 } = req.query
+    const { status, ai_label, search, assigned_to, limit = 50, offset = 0 } = req.query
     const schoolId = req.user.school_id
 
     const [[activeYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
@@ -27,6 +28,10 @@ async function getLeads(req, res, next) {
 
     if (status && status !== 'All')   { where += ' AND l.status = ?';   params.push(status) }
     if (ai_label && ai_label !== 'All') { where += ' AND l.ai_label = ?'; params.push(ai_label) }
+    // assigned_to=me | unassigned | <user id>
+    if (assigned_to === 'me')              { where += ' AND l.assigned_to = ?';  params.push(req.user.id) }
+    else if (assigned_to === 'unassigned') { where += ' AND l.assigned_to IS NULL' }
+    else if (assigned_to && /^\d+$/.test(assigned_to)) { where += ' AND l.assigned_to = ?'; params.push(parseInt(assigned_to)) }
     if (search) {
       where += ' AND (l.parent_name LIKE ? OR l.phone LIKE ? OR l.child_grade LIKE ?)'
       params.push(`%${search}%`, `%${search}%`, `%${search}%`)
@@ -126,7 +131,9 @@ async function createLead(req, res, next) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [schoolId, parent_name, phone.trim(), email||null, child_grade, area, lead_source||'Website', keyword||null, notes, ai_score, ai_label, is_duplicate, (activeYear2 ? activeYear2.id : null)]
     )
-    const [newLead] = await pool.execute('SELECT * FROM leads WHERE id = ?', [result.insertId])
+    await autoAssignLead(result.insertId, schoolId)      // pick a counsellor (no-op if switched off)
+    const [newLead] = await pool.execute(
+      `SELECT l.*, u.name AS assigned_name FROM leads l LEFT JOIN users u ON u.id = l.assigned_to WHERE l.id = ?`, [result.insertId])
     res.status(201).json(newLead[0])
   } catch (err) { next(err) }
 }
@@ -134,7 +141,8 @@ async function createLead(req, res, next) {
 // PUT /api/leads/:id
 async function updateLead(req, res, next) {
   try {
-    const { parent_name, phone, email, child_grade, area, lead_source, keyword, notes, assigned_to } = req.body
+    // assigned_to is deliberately NOT editable here: use PUT /leads/:id/assign (admin only)
+    const { parent_name, phone, email, child_grade, area, lead_source, keyword, notes } = req.body
     await pool.execute(
       `UPDATE leads SET
         parent_name = COALESCE(?, parent_name),
@@ -144,10 +152,9 @@ async function updateLead(req, res, next) {
         area        = COALESCE(?, area),
         lead_source = COALESCE(?, lead_source),
         keyword     = COALESCE(?, keyword),
-        notes       = COALESCE(?, notes),
-        assigned_to = COALESCE(?, assigned_to)
+        notes       = COALESCE(?, notes)
        WHERE id = ? AND school_id = ?`,
-      [parent_name, phone, email, child_grade, area, lead_source, keyword, notes, assigned_to, req.params.id, req.user.school_id]
+      [parent_name, phone, email, child_grade, area, lead_source, keyword, notes, req.params.id, req.user.school_id]
     )
     const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [req.params.id])
     if (!rows.length) return res.status(404).json({ message: 'Lead not found' })
@@ -159,18 +166,19 @@ async function updateLead(req, res, next) {
 async function updateLeadStatus(req, res, next) {
   try {
     const { status } = req.body
+    const note = String(req.body.note || '').trim()
     const valid = ['New','Contacted','Campus Visit','Admission','Lost']
     if (!valid.includes(status)) return res.status(400).json({ message: `Invalid status. Must be one of: ${valid.join(', ')}` })
+    // A stage change must always say why/what happened, so the history is meaningful
+    if (note.length < 3) return res.status(400).json({ message: 'Please add a note to change the stage' })
 
-    const [result] = await pool.execute(
-      'UPDATE leads SET status = ? WHERE id = ? AND school_id = ?',
-      [status, req.params.id, req.user.school_id]
-    )
-    if (result.affectedRows === 0) return res.status(404).json({ message: 'Lead not found' })
+    const [[cur]] = await pool.execute('SELECT status FROM leads WHERE id = ? AND school_id = ?', [req.params.id, req.user.school_id])
+    if (!cur) return res.status(404).json({ message: 'Lead not found' })
 
+    await pool.execute('UPDATE leads SET status = ? WHERE id = ? AND school_id = ?', [status, req.params.id, req.user.school_id])
     await pool.execute(
       'INSERT INTO lead_interactions (lead_id, user_id, type, notes) VALUES (?, ?, ?, ?)',
-      [req.params.id, req.user.id, 'Status Change', `Status updated to "${status}"`]
+      [req.params.id, req.user.id, 'Status Change', `${cur.status} \u2192 ${status}: ${note}`]
     )
     res.json({ id: parseInt(req.params.id), status })
   } catch (err) { next(err) }
@@ -210,11 +218,12 @@ async function createPublicLead(req, res, next) {
 
     const { ai_score, ai_label } = calculateAIScore({ lead_source: 'Landing Page', email, child_grade, keyword: '' })
     const [[pubYear]] = await pool.query('SELECT id FROM academic_years WHERE is_active=1 LIMIT 1')
-    await pool.execute(
+    const [pubRes] = await pool.execute(
       `INSERT INTO leads (school_id, parent_name, phone, email, child_grade, lead_source, notes, ai_score, ai_label, academic_year_id)
        VALUES (?, ?, ?, ?, ?, 'Landing Page', ?, ?, ?, ?)`,
       [school_id, parent_name, phone, email||null, child_grade, message||null, ai_score, ai_label, (pubYear ? pubYear.id : null)]
     )
+    await autoAssignLead(pubRes.insertId, school_id)
     res.status(201).json({ message: 'Enquiry received. The school will contact you within 24 hours.' })
   } catch (err) { next(err) }
 }

@@ -1,8 +1,13 @@
+/**
+ * EnrollIQ — school-level bulk import is switched OFF.
+ * Save as:  backend/src/routes/import.js   (replaces the old file)
+ *
+ * Importing data is now done only by the platform Super Admin, from the Super Admin dashboard
+ * (Data tools tab → routes/superadminData.js). Whatever the school login, these old addresses
+ * answer 403 so nobody can reach the import by calling the API directly either.
+ */
 const router = require('express').Router()
-const { protect } = require('../middleware/auth')
-const { importLeads, importStudents, getImportHistory } = require('../controllers/importController')
-router.use(protect)
-router.post('/leads',    importLeads)
-router.post('/students', importStudents)
-router.get('/history',   getImportHistory)
+router.use((req, res) => res.status(403).json({
+  message: 'Bulk import is managed by the platform Super Admin. Please contact EnrollIQ support to import your data.',
+}))
 module.exports = router

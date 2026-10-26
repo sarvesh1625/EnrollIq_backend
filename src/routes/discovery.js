@@ -114,6 +114,7 @@ router.post('/enquire', async (req, res, next) => {
        VALUES (?,?,?,?,?,?,'Discovery',?,?,?,?,'New',?)`,
       [school_id,parent_name,phone,email||null,child_grade||null,area||null,message||null,ai_score,ai_label,dup.length>0?1:0,(activeYear?activeYear.id:null)])
 
+    await require('../services/leadAssignment').autoAssignLead(result.insertId, school_id)
     res.status(201).json({success:true,lead_id:result.insertId,school_name:schools[0].name,ai_score,ai_label,
       message:`Thank you! ${schools[0].name} will contact you within 24 hours.`})
   } catch(err){next(err)}

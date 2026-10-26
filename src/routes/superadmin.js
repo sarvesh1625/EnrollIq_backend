@@ -66,16 +66,11 @@ router.get('/dashboard', superAuth, async (req, res, next) => {
         COALESCE(sc.status,'Active')            AS status,
         COALESCE(sc.subscription_plan,'Basic')  AS subscription_plan,
         sc.subscription_status, sc.created_at,
-        COUNT(DISTINCT s.id)                    AS total_students,
-        COUNT(DISTINCT l.id)                    AS total_leads,
-        COUNT(DISTINCT u.id)                    AS total_staff,
-        COALESCE(SUM(DISTINCT p.paid_amount),0) AS total_collected
+        (SELECT COUNT(*) FROM students s WHERE s.school_id = sc.id AND s.status='Active')   AS total_students,
+        (SELECT COUNT(*) FROM leads    l WHERE l.school_id = sc.id)                         AS total_leads,
+        (SELECT COUNT(*) FROM users    u WHERE u.school_id = sc.id AND u.is_active=1)       AS total_staff,
+        (SELECT COALESCE(SUM(p.paid_amount),0) FROM payments p WHERE p.school_id = sc.id)   AS total_collected
       FROM schools sc
-      LEFT JOIN students s ON s.school_id = sc.id AND s.status='Active'
-      LEFT JOIN leads    l ON l.school_id = sc.id
-      LEFT JOIN users    u ON u.school_id = sc.id AND u.is_active=1
-      LEFT JOIN payments p ON p.school_id = sc.id
-      GROUP BY sc.id
       ORDER BY sc.created_at DESC
     `)
 
@@ -107,16 +102,11 @@ router.get('/schools', superAuth, async (req, res, next) => {
       SELECT sc.*,
         COALESCE(sc.status,'Active')           AS status,
         COALESCE(sc.subscription_plan,'Basic') AS subscription_plan,
-        COUNT(DISTINCT s.id) AS total_students,
-        COUNT(DISTINCT l.id) AS total_leads,
-        COUNT(DISTINCT u.id) AS total_staff,
-        COALESCE(SUM(p.paid_amount),0) AS total_collected
+        (SELECT COUNT(*) FROM students s WHERE s.school_id = sc.id AND s.status='Active')   AS total_students,
+        (SELECT COUNT(*) FROM leads    l WHERE l.school_id = sc.id)                         AS total_leads,
+        (SELECT COUNT(*) FROM users    u WHERE u.school_id = sc.id AND u.role='admin')      AS total_staff,
+        (SELECT COALESCE(SUM(p.paid_amount),0) FROM payments p WHERE p.school_id = sc.id)   AS total_collected
       FROM schools sc
-      LEFT JOIN students s ON s.school_id = sc.id AND s.status='Active'
-      LEFT JOIN leads    l ON l.school_id = sc.id
-      LEFT JOIN users    u ON u.school_id = sc.id AND u.role='admin'
-      LEFT JOIN payments p ON p.school_id = sc.id
-      GROUP BY sc.id
       ORDER BY sc.created_at DESC
     `)
     res.json(schools)
@@ -233,71 +223,68 @@ router.post('/reset-password/:user_id', superAuth, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// ── Chairman accounts — ONLY creatable/editable here, never from a branch admin's
-// own Staff page (see rolesController.js's SUPERADMIN_ONLY_ROLES guard) ─────────
+// ── Chairman accounts (one per school group — sees every branch in the Group Dashboard) ──────────
+// A "group" is the main branch plus its other branches (schools.group_id; a school with no group_id is its own group).
+async function hasCol(table, col) {
+  const [[r]] = await pool.execute(
+    'SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?', [table, col])
+  return r.n > 0
+}
+async function groupOf(schoolId) {
+  const grouped = await hasCol('schools', 'group_id')
+  const [[sc]] = await pool.execute(`SELECT id, name${grouped ? ', group_id' : ''} FROM schools WHERE id=?`, [schoolId])
+  if (!sc) return null
+  const groupId = (grouped && sc.group_id) || sc.id
+  const [members] = grouped
+    ? await pool.execute('SELECT id, name FROM schools WHERE id=? OR group_id=? ORDER BY (id=?) DESC, id', [groupId, groupId, groupId])
+    : [[{ id: sc.id, name: sc.name }]]
+  const home = members.find(m => m.id === groupId) || members[0]
+  return { groupId, ids: members.map(m => m.id), names: Object.fromEntries(members.map(m => [m.id, m.name])), home }
+}
 
-// GET /api/superadmin/schools/:id/chairmen — chairman accounts for that school's group
 router.get('/schools/:id/chairmen', superAuth, async (req, res, next) => {
   try {
-    const [[school]] = await pool.execute('SELECT group_id FROM schools WHERE id=?', [req.params.id])
-    if (!school) return res.status(404).json({ message: 'School not found' })
-    const groupId = school.group_id
-
-    const [rows] = groupId
-      ? await pool.execute(
-          `SELECT u.id, u.name, u.email, u.is_active, u.last_login, u.school_id, s.name AS home_branch
-           FROM users u JOIN schools s ON s.id = u.school_id
-           WHERE u.role='chairman' AND s.group_id=? ORDER BY u.name`, [groupId])
-      : await pool.execute(
-          `SELECT u.id, u.name, u.email, u.is_active, u.last_login, u.school_id, s.name AS home_branch
-           FROM users u JOIN schools s ON s.id = u.school_id
-           WHERE u.role='chairman' AND u.school_id=? ORDER BY u.name`, [req.params.id])
-    res.json(rows)
+    const g = await groupOf(req.params.id)
+    if (!g) return res.status(404).json({ message: 'School not found' })
+    const [rows] = await pool.execute(
+      `SELECT id, name, email, is_active, school_id FROM users WHERE role='chairman' AND school_id IN (${g.ids.map(() => '?').join(',')}) ORDER BY name`, g.ids)
+    res.json(rows.map(r => ({ id: r.id, name: r.name, email: r.email, is_active: !!r.is_active, home_branch: g.names[r.school_id] || '—' })))
   } catch (err) { next(err) }
 })
 
-// POST /api/superadmin/schools/:id/chairmen — create a chairman for that school's group
-// (their school_id = the branch passed in; the Group Dashboard resolves every sibling
-// branch from that branch's group_id, so any branch in the group works equally)
 router.post('/schools/:id/chairmen', superAuth, async (req, res, next) => {
   try {
-    const { name, email, password } = req.body
-    if (!name?.trim() || !email?.trim() || !password)
-      return res.status(400).json({ message: 'Name, email and password are required' })
+    const name = String(req.body.name || '').trim(), email = String(req.body.email || '').toLowerCase().trim(), password = String(req.body.password || '')
+    if (!name || !email || !password) return res.status(400).json({ message: 'Name, email and password are required' })
+    if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ message: 'Enter a valid email address' })
     if (password.length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters' })
-
-    const [[school]] = await pool.execute('SELECT id FROM schools WHERE id=?', [req.params.id])
-    if (!school) return res.status(404).json({ message: 'School not found' })
-
-    const [dupe] = await pool.execute('SELECT id FROM users WHERE email=?', [email.toLowerCase().trim()])
-    if (dupe.length) return res.status(400).json({ message: 'A user with this email already exists' })
-
+    const g = await groupOf(req.params.id)
+    if (!g) return res.status(404).json({ message: 'School not found' })
+    const [dup] = await pool.execute('SELECT id FROM users WHERE email=?', [email])
+    if (dup.length) return res.status(400).json({ message: 'That email is already used by another account' })
+    const [exists] = await pool.execute(
+      `SELECT id FROM users WHERE role='chairman' AND school_id IN (${g.ids.map(() => '?').join(',')}) LIMIT 1`, g.ids)
+    if (exists.length) return res.status(400).json({ message: 'This group already has a chairman account. Disable or remove it first.' })
     const hash = await bcrypt.hash(password, 10)
-    const [result] = await pool.execute(
-      `INSERT INTO users (school_id, name, email, password_hash, role, is_active)
-       VALUES (?,?,?,?,'chairman',1)`,
-      [req.params.id, name.trim(), email.toLowerCase().trim(), hash])
-    res.status(201).json({ id: result.insertId, message: `${name.trim()} added as Chairman` })
+    const [r] = await pool.execute(
+      `INSERT INTO users (school_id, name, email, password_hash, role, is_active) VALUES (?,?,?,?,'chairman',1)`, [g.home.id, name, email, hash])
+    res.status(201).json({ id: r.insertId, message: 'Chairman account created' })
   } catch (err) { next(err) }
 })
 
-// PATCH /api/superadmin/chairmen/:id — activate/deactivate a chairman account
 router.patch('/chairmen/:id', superAuth, async (req, res, next) => {
   try {
-    const { is_active } = req.body
-    const [result] = await pool.execute(
-      `UPDATE users SET is_active=? WHERE id=? AND role='chairman'`, [is_active ? 1 : 0, req.params.id])
-    if (!result.affectedRows) return res.status(404).json({ message: 'Chairman account not found' })
-    res.json({ message: is_active ? 'Chairman account enabled' : 'Chairman account disabled' })
+    const [r] = await pool.execute("UPDATE users SET is_active=? WHERE id=? AND role='chairman'", [req.body.is_active ? 1 : 0, req.params.id])
+    if (!r.affectedRows) return res.status(404).json({ message: 'Chairman account not found' })
+    res.json({ message: 'Updated' })
   } catch (err) { next(err) }
 })
 
-// DELETE /api/superadmin/chairmen/:id
 router.delete('/chairmen/:id', superAuth, async (req, res, next) => {
   try {
-    const [result] = await pool.execute(`DELETE FROM users WHERE id=? AND role='chairman'`, [req.params.id])
-    if (!result.affectedRows) return res.status(404).json({ message: 'Chairman account not found' })
-    res.json({ message: 'Chairman account removed' })
+    const [r] = await pool.execute("DELETE FROM users WHERE id=? AND role='chairman'", [req.params.id])
+    if (!r.affectedRows) return res.status(404).json({ message: 'Chairman account not found' })
+    res.json({ message: 'Chairman removed' })
   } catch (err) { next(err) }
 })
 

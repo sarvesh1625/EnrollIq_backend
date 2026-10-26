@@ -28,7 +28,7 @@ app.use(cors({
   },
   credentials: true,
 }))
-app.use(express.json({ limit: '10mb' }))   // was express.json() — the default 100kb limit made big Bulk Imports fail with "request entity too large"
+app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')))
 app.use((req, _res, next) => {
@@ -59,10 +59,8 @@ app.use('/api/ai',            require('./routes/ai'))
 app.use('/api/import',        require('./routes/import'))
 app.use('/api/discovery',     require('./routes/discovery'))
 app.use('/api/ads',           require('./routes/ads'))
-app.use('/api/google-ads',    require('./routes/googleAds'))   // ← NEW: "Connect with Google" (OAuth + status + account link)
 app.use('/api/kit', require('./routes/kit'))
 app.use('/api/tracking', require('./routes/tracking'))
-app.use('/api/support', require('./routes/support'))
 app.use('/api/academic', require('./routes/academic'))
 app.use('/api/assistant', require('./routes/assistant'))
 app.use('/api/branches', require('./routes/branches'))
@@ -74,13 +72,10 @@ const { router: superAdminRouter } = require('./routes/superadmin')
 app.use('/api/features', require('./routes/features'))
 app.use('/api/ai-exams', require('./routes/aiExams'))
 app.use('/api/diary', require('./routes/diary'))
-app.use('/api/posts',        require('./routes/posts'))
-app.use('/api/parent/posts', require('./routes/parentPosts'))
 
 app.use('/api/parent',     parentRouter)
 app.use('/api/driver',     driverRouter)
 app.use('/api/superadmin', superAdminRouter)
-app.use('/api/group', require('./routes/group'))
 
 // ── Error Handlers ────────────────────────────────────────────────────────────
 app.use(require('./middleware/errorHandler').notFound)
@@ -91,5 +86,5 @@ app.listen(PORT, () => {
   console.log(`\n🚀  Backend running  → http://localhost:${PORT}`)
   console.log(`🗄️   Database        → cmr_of_school (MySQL)`)
   console.log(`🌐  Frontend origin  → ${process.env.CLIENT_URL || 'http://localhost:5173'}\n`)
-  require('./services/googleAdsSync').start()   // ← NEW: pulls Google Ads stats + budget every 6h for connected schools
+  require('./services/feeReminders').startFeeReminderScheduler()
 })
