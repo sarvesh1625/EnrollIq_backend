@@ -129,7 +129,7 @@ async function createFeeStructure(req, res, next) {
 // POST /api/fees/reminders/run   body: { dry_run?: bool }   (admin or accountant)
 async function runReminders(req, res, next) {
   try {
-    if (!['admin', 'accountant'].includes(req.user.role)) return res.status(403).json({ message: 'Admin or accountant only' })
+    if (!['admin', 'chairman', 'accountant'].includes(req.user.role)) return res.status(403).json({ message: 'Admin or accountant only' })
     const out = await runFeeReminders({ schoolId: req.user.school_id, dryRun: !!req.body.dry_run })
     res.json(out)
   } catch (err) { next(err) }
@@ -138,7 +138,7 @@ async function runReminders(req, res, next) {
 // GET /api/fees/reminders/recent   last 30 reminders sent for this school
 async function recentReminders(req, res, next) {
   try {
-    if (!['admin', 'accountant'].includes(req.user.role)) return res.status(403).json({ message: 'Admin or accountant only' })
+    if (!['admin', 'chairman', 'accountant'].includes(req.user.role)) return res.status(403).json({ message: 'Admin or accountant only' })
     const [rows] = await pool.execute(
       `SELECT n.id, n.title, n.body, n.is_read, n.created_at, s.name AS student_name
        FROM notifications n LEFT JOIN students s ON s.id = n.student_id

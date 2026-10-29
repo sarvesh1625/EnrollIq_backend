@@ -141,8 +141,10 @@ async function runFeeReminders({ schoolId = null, dryRun = false } = {}) {
 // Scheduler: checks every 30 minutes, runs between 9:00 and 19:00 India time.
 // Safe to run many times a day: the log prevents repeats.
 function startFeeReminderScheduler() {
-  if (String(process.env.FEE_REMINDERS || 'on').toLowerCase() === 'off') {
-    console.log('Fee reminders: scheduler disabled (FEE_REMINDERS=off)')
+  // OFF unless you switch it on. A developer machine that shares the live database must never send
+  // real reminders by accident. On the live server set FEE_REMINDERS=on in the environment.
+  if (String(process.env.FEE_REMINDERS || 'off').toLowerCase() !== 'on') {
+    console.log('Fee reminders: scheduler is OFF (set FEE_REMINDERS=on on the live server to enable)')
     return
   }
   const hourIST = () => parseInt(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', hour12: false }).format(new Date()), 10)
