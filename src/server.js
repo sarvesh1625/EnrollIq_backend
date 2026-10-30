@@ -76,6 +76,7 @@ app.use('/api/diary', require('./routes/diary'))
 app.use('/api/parent',     parentRouter)
 app.use('/api/driver',     driverRouter)
 app.use('/api/superadmin', superAdminRouter)
+app.use('/api/group', require('./routes/group'))
 
 // ── Error Handlers ────────────────────────────────────────────────────────────
 app.use(require('./middleware/errorHandler').notFound)
