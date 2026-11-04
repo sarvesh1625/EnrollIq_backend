@@ -72,6 +72,7 @@ const { router: superAdminRouter } = require('./routes/superadmin')
 app.use('/api/features', require('./routes/features'))
 app.use('/api/ai-exams', require('./routes/aiExams'))
 app.use('/api/diary', require('./routes/diary'))
+app.use('/api/teacher', require('./routes/teacher'))
 
 app.use('/api/parent',     parentRouter)
 app.use('/api/driver',     driverRouter)
