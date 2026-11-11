@@ -78,6 +78,7 @@ app.use('/api/parent',     parentRouter)
 app.use('/api/driver',     driverRouter)
 app.use('/api/superadmin', superAdminRouter)
 app.use('/api/group', require('./routes/group'))
+app.use('/api/branding', require('./routes/branding'))
 
 // ── Error Handlers ────────────────────────────────────────────────────────────
 app.use(require('./middleware/errorHandler').notFound)
