@@ -76,6 +76,7 @@ app.use('/api/teacher', require('./routes/teacher'))
 
 app.use('/api/parent',     parentRouter)
 app.use('/api/driver',     driverRouter)
+app.use('/api/superadmin/data', require('./routes/superadminData'))   // must stay ABOVE /api/superadmin
 app.use('/api/superadmin', superAdminRouter)
 app.use('/api/group', require('./routes/group'))
 app.use('/api/branding', require('./routes/branding'))
