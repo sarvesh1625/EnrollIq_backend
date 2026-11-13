@@ -23,10 +23,13 @@ const nextClass = (c) => {
 /* ─── YEARS ──────────────────────────────────────────────── */
 exports.listYears = async (req, res, next) => {
   try {
+    // count only THIS school's students (academic_years itself is shared by all schools)
     const [rows] = await pool.query(`
       SELECT y.*,
-             (SELECT COUNT(*) FROM student_enrollments e WHERE e.academic_year_id = y.id) AS students
-      FROM academic_years y ORDER BY y.name DESC`)
+             (SELECT COUNT(*) FROM student_enrollments e
+                JOIN students s ON s.id = e.student_id
+               WHERE e.academic_year_id = y.id AND s.school_id = ?) AS students
+      FROM academic_years y ORDER BY y.name DESC`, [req.user.school_id])
     res.json(rows)
   } catch (e) { next(e) }
 }
@@ -60,8 +63,8 @@ exports.candidates = async (req, res, next) => {
   try {
     const { from_year, class: cls } = req.query
     if (!from_year) return res.status(400).json({ message: 'from_year is required' })
-    const params = [from_year]
-    let where = 'e.academic_year_id = ?'
+    const params = [from_year, req.user.school_id]
+    let where = 'e.academic_year_id = ? AND s.school_id = ?'
     if (cls && cls !== 'All') { where += ' AND e.class = ?'; params.push(cls) }
 
     const [rows] = await pool.execute(`
@@ -96,10 +99,16 @@ exports.promote = async (req, res, next) => {
     if (!students.length)
       return res.status(400).json({ message: 'No students selected' })
 
+    // only touch students that belong to the logged-in school
+    const ids = students.map(x => x.student_id)
+    const [ok] = await conn.query('SELECT id FROM students WHERE school_id = ? AND id IN (?)', [req.user.school_id, ids])
+    const allowed = new Set(ok.map(x => x.id))
+
     await conn.beginTransaction()
     const counts = { Promoted: 0, Detained: 0, Transferred: 0, Graduated: 0 }
 
     for (const s of students) {
+      if (!allowed.has(s.student_id)) continue
       const action = s.action || 'Promoted'
 
       // 1) close out the old year's enrollment
@@ -147,8 +156,9 @@ exports.history = async (req, res, next) => {
       SELECT e.*, y.name AS year_name, y.start_date
       FROM student_enrollments e
       JOIN academic_years y ON y.id = e.academic_year_id
-      WHERE e.student_id = ?
-      ORDER BY y.name DESC`, [req.params.id])
+      JOIN students s ON s.id = e.student_id
+      WHERE e.student_id = ? AND s.school_id = ?
+      ORDER BY y.name DESC`, [req.params.id, req.user.school_id])
     res.json(rows)
   } catch (e) { next(e) }
 }
