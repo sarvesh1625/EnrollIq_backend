@@ -28,7 +28,7 @@ app.use(cors({
   },
   credentials: true,
 }))
-app.use(express.json())
+app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf } }))   // rawBody is needed to check payment-gateway webhook signatures
 app.use(express.urlencoded({ extended: true }))
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')))
 app.use((req, _res, next) => {
@@ -80,6 +80,7 @@ app.use('/api/superadmin/data', require('./routes/superadminData'))   // must st
 app.use('/api/superadmin', superAdminRouter)
 app.use('/api/group', require('./routes/group'))
 app.use('/api/branding', require('./routes/branding'))
+app.use('/api/payments', require('./routes/payments'))   // online fee payments
 
 // ── Error Handlers ────────────────────────────────────────────────────────────
 app.use(require('./middleware/errorHandler').notFound)
