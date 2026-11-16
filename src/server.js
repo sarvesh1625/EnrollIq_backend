@@ -82,6 +82,7 @@ app.use('/api/group', require('./routes/group'))
 app.use('/api/branding', require('./routes/branding'))
 app.use('/api/payments', require('./routes/payments'))   // online fee payments
 app.use('/api/teacher-plus', require('./routes/teacherPlus'))
+app.use('/api/timetable', require('./routes/timetable'))
 
 // ── Error Handlers ────────────────────────────────────────────────────────────
 app.use(require('./middleware/errorHandler').notFound)
