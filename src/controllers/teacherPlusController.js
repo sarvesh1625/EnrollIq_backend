@@ -197,7 +197,7 @@ exports.studentProfile = async (req, res) => {
       `SELECT COALESCE(sb.name,'Subject') AS subject, AVG(m.marks / NULLIF(m.max_marks,0) * 100) AS pct FROM exam_marks m LEFT JOIN subjects sb ON sb.id=m.subject_id
         WHERE m.school_id=? AND m.student_id=? GROUP BY m.subject_id, sb.name ORDER BY pct DESC`, [sid, st.id])
     res.json({
-      student: { id: st.id, name: st.name, class: st.class, section: st.section || '', roll_number: st.roll_number, dob: st.dob ? ymd(st.dob) : null, parent_name: st.parent_name, parent_phone: st.parent_phone, parent_email: st.parent_email, area: st.area, status: st.status },
+      student: { id: st.id, name: st.name, class: st.class, section: st.section || '', roll_number: st.roll_number, dob: st.dob ? ymd(st.dob) : null, parent_name: st.parent_name, parent_phone: st.parent_phone, parent_email: st.parent_email, area: st.area, status: st.status, photo_url: st.photo_url || null },
       attendance: { present, absent, late, total: Number(A.total || 0), pct: pct(present + late, Number(A.total || 0)) },
       academics: { average_pct: avg, grade: exams.length ? gradeOf(avg) : null, exams_count: exams.length, rank: idx >= 0 && exams.length ? idx + 1 : null, class_size: scored.length },
       exams,
@@ -272,9 +272,9 @@ exports.notifications = async (req, res) => {
 
     // 4. recent parent notifications for my classes
     const [nt] = await pool.query(
-      `SELECT n.title, n.body, n.type, n.created_at, s.name AS student, s.class, s.section FROM notifications n JOIN students s ON s.id=n.student_id
+      `SELECT n.title, n.body, n.type, n.created_at, n.student_id, s.name AS student, s.class, s.section FROM notifications n JOIN students s ON s.id=n.student_id
         WHERE n.school_id=? AND ${f.sql} ORDER BY n.created_at DESC LIMIT 25`, [sid, ...f.args])
-    nt.forEach(n => items.push({ kind: 'sent', icon: 'notifications', color: 'green', title: n.title, detail: `${n.student} · ${n.class}${n.section ? '-' + n.section : ''}`, at: n.created_at, action: null }))
+    nt.forEach(n => items.push({ kind: 'sent', icon: 'notifications', color: 'green', title: n.title, detail: `${n.student} · ${n.class}${n.section ? '-' + n.section : ''}`, at: n.created_at, action: null, body: n.body || '', student_id: n.student_id, student: n.student }))
 
     items.sort((a, b) => (a.kind === b.kind ? new Date(b.at) - new Date(a.at) : a.kind === 'alert' ? -1 : 1))
     res.json(items)
